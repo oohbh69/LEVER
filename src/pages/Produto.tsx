@@ -392,6 +392,77 @@ export function ProdutoPage({
           </div>
         </div>
       </section>
+
+      {/* Sessão Sobre este modelo */}
+      <section className="pdp-about-model-section" aria-labelledby="about-model-heading">
+        <div className="section-header">
+          <h2 id="about-model-heading" className="about-model-title">
+            Sobre este modelo
+          </h2>
+        </div>
+
+        <div className="about-model-layout">
+          {/* Lado Esquerdo: Imagem / Foto Editorial do Modelo */}
+          <div className="about-model-media">
+            <div className="about-model-placeholder">
+              <span className="about-model-tag">Editorial & Design</span>
+              <div className="about-model-icon">
+                <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
+                  <circle cx="12" cy="13" r="4" />
+                </svg>
+              </div>
+              <span className="about-model-placeholder-text">Espaço para foto de uso / editorial</span>
+            </div>
+          </div>
+
+          {/* Lado Direito: Conteúdo e Narrativa */}
+          <div className="about-model-content">
+            <div className="about-model-header-block">
+              <span className="about-model-subtitle">Coleção Essencial</span>
+              <h3 className="about-model-headline">
+                A fusão equilibrada entre presença marcante e conforto diário
+              </h3>
+            </div>
+
+            <div className="about-model-text-block">
+              <p>
+                Desenvolvido para quem valoriza autenticidade e linhas precisas, este modelo traz proporções calibradas que harmonizam com diferentes formatos de rosto.
+              </p>
+              <p>
+                A estrutura em acetato nobre oferece resistência e firmeza sem perder a leveza, enquanto o acabamento polido artesanalmente garante caimento suave sobre o septo e têmporas.
+              </p>
+            </div>
+
+            {/* Destaques do Modelo */}
+            <div className="about-model-pillars">
+              <div className="about-model-pillar">
+                <span className="pillar-num">01</span>
+                <div className="pillar-info">
+                  <h4 className="pillar-title">Design Autoral</h4>
+                  <p className="pillar-desc">Silhueta atemporal pensada para transcender tendências passageiras com elegância discreta.</p>
+                </div>
+              </div>
+
+              <div className="about-model-pillar">
+                <span className="pillar-num">02</span>
+                <div className="pillar-info">
+                  <h4 className="pillar-title">Conforto Anatômico</h4>
+                  <p className="pillar-desc">Distribuição de peso balanceada para evitar marcas no nariz ou incômodos no uso prolongado.</p>
+                </div>
+              </div>
+
+              <div className="about-model-pillar">
+                <span className="pillar-num">03</span>
+                <div className="pillar-info">
+                  <h4 className="pillar-title">Durabilidade Superior</h4>
+                  <p className="pillar-desc">Alma metálica interna e dobradiças sólidas projetadas para acompanhar sua rotina diária.</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
     </div>
   )
 }
