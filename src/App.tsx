@@ -7,6 +7,8 @@ import { SegurancaPage } from './pages/Seguranca'
 import { RastreioPage } from './pages/Rastreio'
 import { TrocasDevolucoesPage } from './pages/TrocasDevolucoes'
 import { CheckoutPage } from './pages/Checkout'
+import { PainelPage } from './pages/Painel'
+import { DashboardPage } from './pages/Dashboard'
 import { CartProvider, useCart, parsePriceToNumber } from './context/CartContext'
 import { CartDrawer } from './components/CartDrawer'
 
@@ -21,10 +23,8 @@ type PageRoute =
   | 'e-seguro-comprar'
   | 'rastrear-pedido'
   | 'trocas-e-devolucoes'
-  | 'quem-somos'
-  | 'e-seguro-comprar'
-  | 'rastrear-pedido'
-  | 'trocas-e-devolucoes'
+  | 'painel'
+  | 'dashboard'
 
 interface Product {
   id: number
@@ -105,17 +105,16 @@ const FAVORITE_PRODUCTS: Product[] = [
 ]
 
 function AppContent() {
-  const [currentPage, setCurrentPage] = useState<PageRoute>('home')
-  const [selectedProductName, setSelectedProductName] = useState('')
-  const [addedCardId, setAddedCardId] = useState<number | null>(null)
-  const { openCart, totalItems, addItem } = useCart()
-  const announcementText = 'ENVIO GRÁTIS A PARTIR DE R$ 199,90'
-  const repeatCount = 5
-  const carouselRef = useRef<HTMLDivElement>(null)
-
-  const getPageFromHash = (): PageRoute => {
+  const getRouteFromUrl = (): PageRoute => {
     const hash = window.location.hash.replace(/^#\/?/, '').toLowerCase()
-    switch (hash) {
+    const pathname = window.location.pathname.replace(/^\/|\/$/g, '').toLowerCase()
+
+    const route = hash || pathname
+    switch (route) {
+      case 'painel':
+        return 'painel'
+      case 'dashboard':
+        return 'dashboard'
       case 'carrinho':
         openCart()
         return 'home'
@@ -140,19 +139,56 @@ function AppContent() {
     }
   }
 
+  const [currentPage, setCurrentPage] = useState<PageRoute>(getRouteFromUrl)
+  const [selectedProductName, setSelectedProductName] = useState('')
+  const [addedCardId, setAddedCardId] = useState<number | null>(null)
+  const { openCart, totalItems, addItem } = useCart()
+  const announcementText = 'ENVIO GRÁTIS A PARTIR DE R$ 199,90'
+  const repeatCount = 5
+  const carouselRef = useRef<HTMLDivElement>(null)
+
   useEffect(() => {
-    const handleHashChange = () => {
-      setCurrentPage(getPageFromHash())
+    const handleLocationChange = () => {
+      setCurrentPage(getRouteFromUrl())
       window.scrollTo({ top: 0, behavior: 'smooth' })
     }
 
-    handleHashChange()
-    window.addEventListener('hashchange', handleHashChange)
-    return () => window.removeEventListener('hashchange', handleHashChange)
+    handleLocationChange()
+    window.addEventListener('popstate', handleLocationChange)
+    window.addEventListener('hashchange', handleLocationChange)
+    return () => {
+      window.removeEventListener('popstate', handleLocationChange)
+      window.removeEventListener('hashchange', handleLocationChange)
+    }
   }, [])
+
+  useEffect(() => {
+    const routeTitles: Record<PageRoute, string> = {
+      home: 'LEVER',
+      produto: selectedProductName ? `LEVER | ${selectedProductName}` : 'LEVER | Óculos de Sol',
+      carrinho: 'LEVER | Carrinho',
+      checkout: 'LEVER | Checkout Seguro',
+      contato: 'LEVER | Contato',
+      'politica-de-frete': 'LEVER | Política de Frete',
+      'quem-somos': 'LEVER | Quem Somos',
+      'e-seguro-comprar': 'LEVER | É Seguro Comprar',
+      'rastrear-pedido': 'LEVER | Rastrear Pedido',
+      'trocas-e-devolucoes': 'LEVER | Trocas e Devoluções',
+      painel: 'LEVER | Login',
+      dashboard: 'LEVER | Dashboard',
+    }
+    document.title = routeTitles[currentPage] || 'LEVER'
+  }, [currentPage, selectedProductName])
 
   const navigateTo = (page: PageRoute) => {
     if (page === 'home') {
+      window.history.pushState({}, '', '/')
+      window.location.hash = ''
+    } else if (page === 'painel') {
+      window.history.pushState({}, '', '/painel')
+      window.location.hash = ''
+    } else if (page === 'dashboard') {
+      window.history.pushState({}, '', '/dashboard')
       window.location.hash = ''
     } else {
       window.location.hash = page
@@ -203,6 +239,13 @@ function AppContent() {
     }, 50)
   }
 
+  if (currentPage === 'painel') {
+    return <PainelPage onLogin={() => navigateTo('dashboard')} />
+  }
+
+  if (currentPage === 'dashboard') {
+    return <DashboardPage />
+  }
 
   return (
     <div className="app-layout">
