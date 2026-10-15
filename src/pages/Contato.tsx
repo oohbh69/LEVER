@@ -37,6 +37,13 @@ export function ContatoPage() {
           </div>
 
           <div className="contact-info-item">
+            <span className="contact-info-label">Telefone & WhatsApp</span>
+            <a href="tel:+5511920713667" className="contact-link">
+              11 92071-3667
+            </a>
+          </div>
+
+          <div className="contact-info-item">
             <span className="contact-info-label">Horário de Atendimento</span>
             <p className="contact-info-text">Segunda a Sexta: 09h às 18h</p>
             <p className="contact-info-text">Sábado: 09h às 13h</p>

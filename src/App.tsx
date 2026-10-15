@@ -6,12 +6,21 @@ import { QuemSomosPage } from './pages/QuemSomos'
 import { SegurancaPage } from './pages/Seguranca'
 import { RastreioPage } from './pages/Rastreio'
 import { TrocasDevolucoesPage } from './pages/TrocasDevolucoes'
+import { CheckoutPage } from './pages/Checkout'
+import { CartProvider, useCart, parsePriceToNumber } from './context/CartContext'
+import { CartDrawer } from './components/CartDrawer'
 
 type PageRoute =
   | 'home'
   | 'produto'
+  | 'carrinho'
+  | 'checkout'
   | 'contato'
   | 'politica-de-frete'
+  | 'quem-somos'
+  | 'e-seguro-comprar'
+  | 'rastrear-pedido'
+  | 'trocas-e-devolucoes'
   | 'quem-somos'
   | 'e-seguro-comprar'
   | 'rastrear-pedido'
@@ -95,9 +104,11 @@ const FAVORITE_PRODUCTS: Product[] = [
   },
 ]
 
-export function App() {
+function AppContent() {
   const [currentPage, setCurrentPage] = useState<PageRoute>('home')
   const [selectedProductName, setSelectedProductName] = useState('')
+  const [addedCardId, setAddedCardId] = useState<number | null>(null)
+  const { openCart, totalItems, addItem } = useCart()
   const announcementText = 'ENVIO GRÁTIS A PARTIR DE R$ 199,90'
   const repeatCount = 5
   const carouselRef = useRef<HTMLDivElement>(null)
@@ -105,6 +116,11 @@ export function App() {
   const getPageFromHash = (): PageRoute => {
     const hash = window.location.hash.replace(/^#\/?/, '').toLowerCase()
     switch (hash) {
+      case 'carrinho':
+        openCart()
+        return 'home'
+      case 'checkout':
+        return 'checkout'
       case 'produto':
         return 'produto'
       case 'contato':
@@ -259,8 +275,9 @@ export function App() {
           <button
             type="button"
             className="header-btn"
-            aria-label="Carrinho"
+            aria-label={`Carrinho (${totalItems} ${totalItems === 1 ? 'item' : 'itens'})`}
             id="cart-btn"
+            onClick={openCart}
           >
             <svg
               width="22"
@@ -276,6 +293,9 @@ export function App() {
               <circle cx="20" cy="21" r="1" />
               <path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6" />
             </svg>
+            {totalItems > 0 && (
+              <span className="header-cart-badge">{totalItems}</span>
+            )}
           </button>
         </div>
       </header>
@@ -442,8 +462,21 @@ export function App() {
                       type="button"
                       className="product-add-btn"
                       aria-label={`Adicionar ${product.name} ao carrinho`}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        addItem({
+                          id: product.id,
+                          name: product.name,
+                          price: parsePriceToNumber(product.price),
+                          priceFormatted: product.price,
+                          installments: product.installments,
+                          tag: product.tag,
+                        })
+                        setAddedCardId(product.id)
+                        setTimeout(() => setAddedCardId(null), 1500)
+                      }}
                     >
-                      ADICIONAR
+                      {addedCardId === product.id ? 'ADICIONADO ✓' : 'ADICIONAR'}
                     </button>
                   </article>
                 ))}
@@ -544,6 +577,9 @@ export function App() {
             productTitle={selectedProductName || 'Óculos de Sol LEVER Blackout Acetato UV400'}
           />
         )}
+        {currentPage === 'checkout' && (
+          <CheckoutPage onBackToStore={() => navigateTo('home')} />
+        )}
         {currentPage === 'contato' && <ContatoPage />}
         {currentPage === 'politica-de-frete' && <PoliticaFretePage />}
         {currentPage === 'quem-somos' && <QuemSomosPage />}
@@ -591,6 +627,24 @@ export function App() {
                 </svg>
                 <a href="mailto:leverglasses@gmail.com" className="footer-email">
                   leverglasses@gmail.com
+                </a>
+              </div>
+
+              <div className="footer-contact">
+                <svg
+                  width="18"
+                  height="18"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z" />
+                </svg>
+                <a href="tel:+5511920713667" className="footer-email">
+                  11 92071-3667
                 </a>
               </div>
             </div>
@@ -693,7 +747,20 @@ export function App() {
           </div>
         </div>
       </footer>
+      {/* Carrinho Lateral */}
+      <CartDrawer
+        onNavigateToCatalog={() => navigateTo('home')}
+        onNavigateToCheckout={() => navigateTo('checkout')}
+      />
     </div>
+  )
+}
+
+export function App() {
+  return (
+    <CartProvider>
+      <AppContent />
+    </CartProvider>
   )
 }
 

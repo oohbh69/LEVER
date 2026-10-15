@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
+import { useCart } from '../context/CartContext'
 
 interface ProductPageProps {
   productTitle?: string
@@ -61,7 +62,21 @@ export function ProdutoPage({
     },
   ]
 
+  const { addItem } = useCart()
+
   const handleAddToCart = () => {
+    addItem(
+      {
+        id: 101,
+        name: productTitle,
+        price: 149.9,
+        priceFormatted: 'R$ 149,90',
+        installments: '6x de R$ 24,98 sem juros',
+        tag: 'Destaque',
+        variant: 'Acetato Preto Fosco • Lente UV400',
+      },
+      quantity
+    )
     setAddedToCart(true)
     setTimeout(() => setAddedToCart(false), 2200)
   }
