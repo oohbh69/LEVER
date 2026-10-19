@@ -13,6 +13,7 @@ import { CartProvider, useCart } from './context/CartContext'
 import { CartDrawer } from './components/CartDrawer'
 import { supabase } from './lib/supabase'
 import type { Session } from '@supabase/supabase-js'
+import { getVitrineConfig, type VitrineConfig } from './pages/CarrosselVitrine'
 
 type PageRoute =
   | 'home'
@@ -30,6 +31,7 @@ type PageRoute =
   | 'criar-produto'
   | 'frete'
   | 'cupom'
+  | 'carrossel-vitrine'
 
 interface Product {
   id: string | number
@@ -92,6 +94,8 @@ function AppContent() {
         return 'frete'
       case 'cupom':
         return 'cupom'
+      case 'carrossel-vitrine':
+        return 'carrossel-vitrine'
       case 'carrinho':
         openCart()
         return 'home'
@@ -123,6 +127,17 @@ function AppContent() {
   const [isLoadingProducts, setIsLoadingProducts] = useState(true)
   const [session, setSession] = useState<Session | null>(null)
   const [isAuthLoading, setIsAuthLoading] = useState(true)
+  const [vitrineConfig, setVitrineConfig] = useState<VitrineConfig>(getVitrineConfig)
+
+  useEffect(() => {
+    const handleVitrineUpdate = () => {
+      setVitrineConfig(getVitrineConfig())
+    }
+    window.addEventListener('vitrine-config-updated', handleVitrineUpdate)
+    return () => {
+      window.removeEventListener('vitrine-config-updated', handleVitrineUpdate)
+    }
+  }, [])
 
   useEffect(() => {
     let isMounted = true
@@ -142,7 +157,7 @@ function AppContent() {
         }
 
         if (data && isMounted) {
-          const list: Product[] = data.map((item: any) => {
+          let list: Product[] = data.map((item: any) => {
             const rawPrice = Number(item.price) || 0
             const promo = item.promo_price ? Number(item.promo_price) : null
             const finalPrice = promo && promo > 0 && promo < rawPrice ? promo : rawPrice
@@ -152,16 +167,32 @@ function AppContent() {
             const firstImg = item.product_images?.[0]?.image_url
             const primaryImg = coverImg || firstImg || undefined
 
+            const customTag = vitrineConfig.customTags[item.id]
+            const defaultTag = promo && promo > 0 && promo < rawPrice ? 'Promoção' : undefined
+
             return {
               id: item.id,
               name: item.name,
               price: `R$ ${finalPrice.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
               priceNumeric: finalPrice,
               installments: `3x de R$ ${installmentsCalc} sem juros`,
-              tag: promo && promo > 0 && promo < rawPrice ? 'Promoção' : undefined,
+              tag: customTag || defaultTag,
               imageUrl: primaryImg,
             }
           })
+
+          if (vitrineConfig.featuredProductIds && vitrineConfig.featuredProductIds.length > 0) {
+            const featuredMap = new Map(list.map((p) => [String(p.id), p]))
+            const orderedList: Product[] = []
+            for (const id of vitrineConfig.featuredProductIds) {
+              const prod = featuredMap.get(String(id))
+              if (prod) orderedList.push(prod)
+            }
+            if (orderedList.length > 0) {
+              list = orderedList
+            }
+          }
+
           setFavoriteProducts(list)
         }
       } catch (err) {
@@ -178,7 +209,7 @@ function AppContent() {
     return () => {
       isMounted = false
     }
-  }, [])
+  }, [vitrineConfig])
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -232,6 +263,7 @@ function AppContent() {
       'criar-produto': 'LEVER | Criar Produto',
       frete: 'LEVER | Frete Personalizado',
       cupom: 'LEVER | Cupons de Desconto',
+      'carrossel-vitrine': 'LEVER | Carrossel Vitrine',
     }
     document.title = routeTitles[currentPage] || 'LEVER'
   }, [currentPage, selectedProductName])
@@ -254,6 +286,9 @@ function AppContent() {
       window.location.hash = ''
     } else if (page === 'cupom') {
       window.history.pushState({}, '', '/cupom')
+      window.location.hash = ''
+    } else if (page === 'carrossel-vitrine') {
+      window.history.pushState({}, '', '/carrossel-vitrine')
       window.location.hash = ''
     } else {
       window.location.hash = page
@@ -309,7 +344,8 @@ function AppContent() {
     currentPage === 'dashboard' ||
     currentPage === 'criar-produto' ||
     currentPage === 'frete' ||
-    currentPage === 'cupom'
+    currentPage === 'cupom' ||
+    currentPage === 'carrossel-vitrine'
 
   if (isDashboardRoute) {
     if (isAuthLoading) {
@@ -506,34 +542,110 @@ function AppContent() {
       <main className="main-content">
         {currentPage === 'home' && (
           <>
-            {/* Espaço para o Banner */}
+            {/* Espaço para o Banner ou Banner da Vitrine */}
             <section className="banner-area" aria-label="Banner">
-              <div className="banner-placeholder">
-                <svg
-                  className="banner-placeholder-icon"
-                  width="44"
-                  height="44"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-                  <circle cx="8.5" cy="8.5" r="1.5" />
-                  <polyline points="21 15 16 10 5 21" />
-                </svg>
-                <span className="banner-placeholder-text">Espaço reservado para o banner</span>
-              </div>
+              {(() => {
+                const activeBanner = vitrineConfig.banners?.find((b) => b.isActive)
+                if (activeBanner) {
+                  return (
+                    <div
+                      className="banner-active-container"
+                      style={{
+                        position: 'relative',
+                        width: '100%',
+                        minHeight: '260px',
+                        maxHeight: '440px',
+                        overflow: 'hidden',
+                        cursor: activeBanner.linkUrl ? 'pointer' : 'default',
+                      }}
+                      onClick={() => {
+                        if (activeBanner.linkUrl) {
+                          if (activeBanner.linkUrl.startsWith('/')) {
+                            const page = activeBanner.linkUrl.replace(/^\//, '') as PageRoute
+                            navigateTo(page || 'home')
+                          } else {
+                            window.location.href = activeBanner.linkUrl
+                          }
+                        }
+                      }}
+                    >
+                      <img
+                        src={activeBanner.imageUrl}
+                        alt={activeBanner.title}
+                        style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+                      />
+                      <div
+                        style={{
+                          position: 'absolute',
+                          inset: 0,
+                          background: 'linear-gradient(to top, rgba(0,0,0,0.65) 0%, rgba(0,0,0,0.15) 60%, transparent 100%)',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          justifyContent: 'flex-end',
+                          padding: '2rem 2.5rem',
+                          color: '#ffffff',
+                        }}
+                      >
+                        <h2 style={{ margin: 0, fontSize: '1.6rem', fontWeight: 400, letterSpacing: '-0.02em', textTransform: 'uppercase' }}>
+                          {activeBanner.title}
+                        </h2>
+                        {activeBanner.subtitle && (
+                          <p style={{ margin: '0.4rem 0 0', fontSize: '0.9rem', fontWeight: 400, opacity: 0.9 }}>
+                            {activeBanner.subtitle}
+                          </p>
+                        )}
+                        {activeBanner.buttonText && (
+                          <span
+                            style={{
+                              marginTop: '0.85rem',
+                              alignSelf: 'flex-start',
+                              padding: '0.45rem 1rem',
+                              backgroundColor: '#ffffff',
+                              color: '#000000',
+                              fontSize: '0.75rem',
+                              letterSpacing: '0.06em',
+                              textTransform: 'uppercase',
+                              fontWeight: 400,
+                            }}
+                          >
+                            {activeBanner.buttonText}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  )
+                }
+
+                return (
+                  <div className="banner-placeholder">
+                    <svg
+                      className="banner-placeholder-icon"
+                      width="44"
+                      height="44"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.5"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+                      <circle cx="8.5" cy="8.5" r="1.5" />
+                      <polyline points="21 15 16 10 5 21" />
+                    </svg>
+                    <span className="banner-placeholder-text">Espaço reservado para o banner</span>
+                  </div>
+                )
+              })()}
             </section>
 
             {/* Carrossel Os Queridinhos */}
-            <section className="favorites-section" aria-labelledby="favorites-heading">
-              <div className="section-header">
-                <h2 id="favorites-heading" className="section-title">
-                  Os Queridinhos
-                </h2>
+            {vitrineConfig.isEnabled && (
+              <section className="favorites-section" aria-labelledby="favorites-heading">
+                <div className="section-header">
+                  <h2 id="favorites-heading" className="section-title">
+                    {vitrineConfig.sectionTitle || 'Os Queridinhos'}
+                  </h2>
 
                 {favoriteProducts.length > 0 && (
                   <div className="carousel-controls">
@@ -740,6 +852,7 @@ function AppContent() {
                 </div>
               )}
             </section>
+          )}
 
             {/* Sessão Categorias */}
             <section className="categories-section" aria-labelledby="categories-heading">

@@ -3,8 +3,9 @@ import { supabase } from '../lib/supabase'
 import { CriarProdutoPage, type NewProductData } from './CriarProduto'
 import { CriarFretePage } from './CriarFrete'
 import { CriarCupomPage } from './CriarCupom'
+import { CarrosselVitrinePage } from './CarrosselVitrine'
 
-type TabType = 'dashboard' | 'pedidos' | 'produtos' | 'criar-produto' | 'frete' | 'cupom'
+type TabType = 'dashboard' | 'pedidos' | 'produtos' | 'criar-produto' | 'frete' | 'cupom' | 'carrossel-vitrine'
 
 interface OrderItem {
   id: string
@@ -441,6 +442,27 @@ export function DashboardPage({
               <line x1="13" y1="5" x2="13" y2="19" strokeDasharray="2 2" />
             </svg>
             Cupom
+          </button>
+
+          <button
+            type="button"
+            className={`dashboard-nav-item ${activeTab === 'carrossel-vitrine' ? 'active' : ''}`}
+            onClick={() => setActiveTab('carrossel-vitrine')}
+            style={{ fontWeight: 400 }}
+          >
+            <svg
+              className="dashboard-nav-icon"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.75"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <rect x="2" y="7" width="20" height="15" rx="2" ry="2" />
+              <polyline points="17 2 12 7 7 2" />
+            </svg>
+            Carrossel Vitrine
           </button>
         </nav>
 
@@ -1244,6 +1266,14 @@ export function DashboardPage({
         {/* TAB 6: CUPOM */}
         {activeTab === 'cupom' && (
           <CriarCupomPage onBack={() => setActiveTab('dashboard')} />
+        )}
+
+        {/* TAB 7: CARROSSEL VITRINE */}
+        {activeTab === 'carrossel-vitrine' && (
+          <CarrosselVitrinePage
+            onBack={() => setActiveTab('dashboard')}
+            onNavigateToStore={onNavigateToStore}
+          />
         )}
       </main>
 
