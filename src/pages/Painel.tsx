@@ -147,7 +147,7 @@ export function PainelPage({ onLogin, onBackToStore }: PainelPageProps) {
             <input
               type="email"
               id="painel-email"
-              placeholder="lever@gmail.com"
+              placeholder="seu@email.com"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               autoComplete="email"
