@@ -12,6 +12,16 @@ export interface VitrineBanner {
   isActive: boolean
 }
 
+export interface CategoryBannerItem {
+  id: string
+  title: string
+  buttonText?: string
+  linkUrl?: string
+  imageUrl?: string
+  isActive: boolean
+  sortOrder: number
+}
+
 export interface VitrineConfig {
   sectionTitle: string
   sectionSubtitle?: string
@@ -21,6 +31,9 @@ export interface VitrineConfig {
   featuredProductIds: string[]
   customTags: Record<string, string>
   banners: VitrineBanner[]
+  categoriesSectionTitle: string
+  categoriesIsEnabled: boolean
+  categoryBanners: CategoryBannerItem[]
 }
 
 const DEFAULT_CONFIG: VitrineConfig = {
@@ -32,6 +45,28 @@ const DEFAULT_CONFIG: VitrineConfig = {
   featuredProductIds: [],
   customTags: {},
   banners: [],
+  categoriesSectionTitle: 'Categorias',
+  categoriesIsEnabled: true,
+  categoryBanners: [
+    {
+      id: 'default-cat-1',
+      title: 'Coleção Verão',
+      buttonText: 'CONFERIR',
+      linkUrl: '/',
+      imageUrl: '',
+      isActive: true,
+      sortOrder: 0,
+    },
+    {
+      id: 'default-cat-2',
+      title: 'Lançamentos',
+      buttonText: 'CONFERIR',
+      linkUrl: '/',
+      imageUrl: '',
+      isActive: true,
+      sortOrder: 1,
+    },
+  ],
 }
 
 const STORAGE_KEY = 'lever_vitrine_config'
@@ -57,6 +92,85 @@ export function saveVitrineConfig(config: VitrineConfig): void {
   }
 }
 
+export async function fetchVitrineConfigFromSupabase(): Promise<VitrineConfig> {
+  try {
+    // 1. Buscar configurações da vitrine
+    const { data: settingsData } = await supabase
+      .from('vitrine_settings')
+      .select('*')
+      .eq('id', 'default')
+      .maybeSingle()
+
+    // 2. Buscar banners do banco
+    const { data: bannersData, error: bannersErr } = await supabase
+      .from('banners')
+      .select('*')
+      .order('sort_order', { ascending: true })
+
+    if (bannersErr) {
+      console.error('Erro ao buscar banners do Supabase:', bannersErr)
+    }
+
+    const banners: VitrineBanner[] = (bannersData || []).map((b: any) => ({
+      id: String(b.id),
+      title: b.title || 'Nova Coleção',
+      subtitle: b.subtitle || undefined,
+      buttonText: b.button_text || undefined,
+      linkUrl: b.link_url || undefined,
+      imageUrl: b.image_url,
+      isActive: b.is_active ?? true,
+    }))
+
+    // 3. Buscar banners de categoria do banco
+    const { data: catBannersData, error: catBannersErr } = await supabase
+      .from('category_banners')
+      .select('*')
+      .order('sort_order', { ascending: true })
+
+    if (catBannersErr) {
+      console.error('Erro ao buscar banners de categoria do Supabase:', catBannersErr)
+    }
+
+    const categoryBanners: CategoryBannerItem[] = (catBannersData || []).map((cb: any) => ({
+      id: String(cb.id),
+      title: cb.title || 'Categoria',
+      buttonText: cb.button_text || undefined,
+      linkUrl: cb.link_url || undefined,
+      imageUrl: cb.image_url || undefined,
+      isActive: cb.is_active ?? true,
+      sortOrder: cb.sort_order ?? 0,
+    }))
+
+    const config: VitrineConfig = {
+      sectionTitle: settingsData?.section_title ?? DEFAULT_CONFIG.sectionTitle,
+      sectionSubtitle: settingsData?.section_subtitle ?? DEFAULT_CONFIG.sectionSubtitle,
+      isEnabled: settingsData?.is_enabled ?? DEFAULT_CONFIG.isEnabled,
+      autoScroll: settingsData?.auto_scroll ?? DEFAULT_CONFIG.autoScroll,
+      autoScrollInterval: settingsData?.auto_scroll_interval ?? DEFAULT_CONFIG.autoScrollInterval,
+      featuredProductIds: Array.isArray(settingsData?.featured_product_ids)
+        ? settingsData.featured_product_ids
+        : DEFAULT_CONFIG.featuredProductIds,
+      customTags:
+        typeof settingsData?.custom_tags === 'object' && settingsData?.custom_tags !== null
+          ? settingsData.custom_tags
+          : DEFAULT_CONFIG.customTags,
+      banners: banners.length > 0 ? banners : getVitrineConfig().banners,
+      categoriesSectionTitle:
+        settingsData?.categories_section_title ?? DEFAULT_CONFIG.categoriesSectionTitle,
+      categoriesIsEnabled:
+        settingsData?.categories_is_enabled ?? DEFAULT_CONFIG.categoriesIsEnabled,
+      categoryBanners:
+        categoryBanners.length > 0 ? categoryBanners : getVitrineConfig().categoryBanners || DEFAULT_CONFIG.categoryBanners,
+    }
+
+    saveVitrineConfig(config)
+    return config
+  } catch (err) {
+    console.error('Falha geral ao buscar vitrine do Supabase:', err)
+    return getVitrineConfig()
+  }
+}
+
 interface ProductItem {
   id: string
   name: string
@@ -75,7 +189,7 @@ interface CarrosselVitrinePageProps {
 }
 
 export function CarrosselVitrinePage({ onBack, onNavigateToStore }: CarrosselVitrinePageProps) {
-  const [activeTab, setActiveTab] = useState<'produtos' | 'banners' | 'configuracoes'>('produtos')
+  const [activeTab, setActiveTab] = useState<'produtos' | 'banners' | 'categorias' | 'configuracoes'>('produtos')
   const [config, setConfig] = useState<VitrineConfig>(getVitrineConfig)
   const [products, setProducts] = useState<ProductItem[]>([])
   const [isLoadingProducts, setIsLoadingProducts] = useState(true)
@@ -84,15 +198,25 @@ export function CarrosselVitrinePage({ onBack, onNavigateToStore }: CarrosselVit
   const [searchQuery, setSearchQuery] = useState('')
   const [filterMode, setFilterMode] = useState<'todos' | 'selecionados' | 'nao-selecionados'>('todos')
 
-  // Estado para adicionar banner
+  // Estado para adicionar banner hero
   const [showAddBannerModal, setShowAddBannerModal] = useState(false)
   const [bannerTitle, setBannerTitle] = useState('')
   const [bannerSubtitle, setBannerSubtitle] = useState('')
-  const [bannerBtnText, setBannerBtnText] = useState('CONFERIR')
+  const [bannerBtnText, setBannerBtnText] = useState('')
   const [bannerLink, setBannerLink] = useState('')
   const [bannerImageUrl, setBannerImageUrl] = useState('')
   const [isUploadingBanner, setIsUploadingBanner] = useState(false)
   const bannerFileInputRef = useRef<HTMLInputElement>(null)
+
+  // Estado para adicionar / editar banner de categoria
+  const [showCatBannerModal, setShowCatBannerModal] = useState(false)
+  const [editingCatBannerId, setEditingCatBannerId] = useState<string | null>(null)
+  const [catBannerTitle, setCatBannerTitle] = useState('')
+  const [catBannerBtnText, setCatBannerBtnText] = useState('CONFERIR')
+  const [catBannerLink, setCatBannerLink] = useState('')
+  const [catBannerImageUrl, setCatBannerImageUrl] = useState('')
+  const [isUploadingCatBanner, setIsUploadingCatBanner] = useState(false)
+  const catBannerFileInputRef = useRef<HTMLInputElement>(null)
 
   // Feedback
   const [toastMessage, setToastMessage] = useState<string | null>(null)
@@ -142,6 +266,12 @@ export function CarrosselVitrinePage({ onBack, onNavigateToStore }: CarrosselVit
             }
           })
           setProducts(list)
+        }
+
+        // Carregar configurações e banners reais do banco de dados
+        const remoteConfig = await fetchVitrineConfigFromSupabase()
+        if (isMounted && remoteConfig) {
+          setConfig(remoteConfig)
         }
       } catch (err) {
         console.error('Falha ao carregar produtos:', err)
@@ -243,61 +373,356 @@ export function CarrosselVitrinePage({ onBack, onNavigateToStore }: CarrosselVit
   }
 
   // Salvar novo banner
-  const handleSaveBanner = () => {
+  const handleSaveBanner = async () => {
     if (!bannerImageUrl.trim()) {
       showToast('Por favor, faça upload ou informe a imagem do banner.')
       return
     }
 
-    const newBanner: VitrineBanner = {
-      id: String(Date.now()),
+    setIsSaving(true)
+
+    const bannerPayload = {
       title: bannerTitle.trim() || 'Nova Coleção',
-      subtitle: bannerSubtitle.trim() || undefined,
-      buttonText: bannerBtnText.trim() || 'CONFERIR',
-      linkUrl: bannerLink.trim() || undefined,
-      imageUrl: bannerImageUrl.trim(),
-      isActive: true,
+      subtitle: bannerSubtitle.trim() || null,
+      button_text: bannerBtnText.trim() || null,
+      link_url: bannerLink.trim() || null,
+      image_url: bannerImageUrl.trim(),
+      is_active: true,
+      sort_order: config.banners.length,
     }
 
-    setConfig((prev) => ({
-      ...prev,
-      banners: [newBanner, ...prev.banners],
-    }))
+    try {
+      const { data: inserted, error: insertErr } = await supabase
+        .from('banners')
+        .insert(bannerPayload)
+        .select()
+        .single()
 
-    setShowAddBannerModal(false)
-    setBannerTitle('')
-    setBannerSubtitle('')
-    setBannerBtnText('CONFERIR')
-    setBannerLink('')
-    setBannerImageUrl('')
-    showToast('Banner adicionado com sucesso!')
+      if (insertErr) {
+        console.error('Erro ao salvar banner no Supabase:', insertErr)
+        showToast('Erro ao gravar banner no banco: ' + insertErr.message)
+      } else if (inserted) {
+        const newBanner: VitrineBanner = {
+          id: String(inserted.id),
+          title: inserted.title,
+          subtitle: inserted.subtitle || undefined,
+          buttonText: inserted.button_text,
+          linkUrl: inserted.link_url || undefined,
+          imageUrl: inserted.image_url,
+          isActive: inserted.is_active,
+        }
+
+        const updatedConfig = {
+          ...config,
+          banners: [newBanner, ...config.banners],
+        }
+
+        setConfig(updatedConfig)
+        saveVitrineConfig(updatedConfig)
+        showToast('Banner salvo e publicado com sucesso!')
+      }
+    } catch (err) {
+      console.error('Falha geral ao salvar banner:', err)
+      showToast('Erro ao salvar banner.')
+    } finally {
+      setIsSaving(false)
+      setShowAddBannerModal(false)
+      setBannerTitle('')
+      setBannerSubtitle('')
+      setBannerBtnText('')
+      setBannerLink('')
+      setBannerImageUrl('')
+    }
   }
 
-  const handleDeleteBanner = (bannerId: string) => {
-    setConfig((prev) => ({
-      ...prev,
-      banners: prev.banners.filter((b) => b.id !== bannerId),
-    }))
+  const handleDeleteBanner = async (bannerId: string) => {
+    const updatedBanners = config.banners.filter((b) => b.id !== bannerId)
+    const updatedConfig = { ...config, banners: updatedBanners }
+    setConfig(updatedConfig)
+    saveVitrineConfig(updatedConfig)
     showToast('Banner removido da vitrine.')
+
+    try {
+      await supabase.from('banners').delete().eq('id', bannerId)
+    } catch (err) {
+      console.error('Erro ao excluir banner do banco:', err)
+    }
   }
 
-  const handleToggleBannerActive = (bannerId: string) => {
-    setConfig((prev) => ({
-      ...prev,
-      banners: prev.banners.map((b) =>
-        b.id === bannerId ? { ...b, isActive: !b.isActive } : b
-      ),
-    }))
+  const handleToggleBannerActive = async (bannerId: string) => {
+    const targetBanner = config.banners.find((b) => b.id === bannerId)
+    if (!targetBanner) return
+
+    const newActiveState = !targetBanner.isActive
+
+    const updatedBanners = config.banners.map((b) =>
+      b.id === bannerId ? { ...b, isActive: newActiveState } : b
+    )
+    const updatedConfig = { ...config, banners: updatedBanners }
+    setConfig(updatedConfig)
+    saveVitrineConfig(updatedConfig)
+    showToast(newActiveState ? 'Banner ativado!' : 'Banner pausado!')
+
+    try {
+      await supabase
+        .from('banners')
+        .update({ is_active: newActiveState, updated_at: new Date().toISOString() })
+        .eq('id', bannerId)
+    } catch (err) {
+      console.error('Erro ao alterar status do banner:', err)
+    }
+  }
+
+  // Handlers para Banners de Categoria
+  const handleCatBannerUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    try {
+      setIsUploadingCatBanner(true)
+      const res = await uploadFileToR2(file, 'products')
+      if (res && res.url) {
+        setCatBannerImageUrl(res.url)
+        showToast('Imagem da categoria enviada com sucesso!')
+      }
+    } catch (err: any) {
+      showToast(err.message || 'Erro durante upload da imagem.')
+    } finally {
+      setIsUploadingCatBanner(false)
+      if (catBannerFileInputRef.current) catBannerFileInputRef.current.value = ''
+    }
+  }
+
+  const handleOpenAddCatBanner = () => {
+    setEditingCatBannerId(null)
+    setCatBannerTitle('')
+    setCatBannerBtnText('CONFERIR')
+    setCatBannerLink('')
+    setCatBannerImageUrl('')
+    setShowCatBannerModal(true)
+  }
+
+  const handleOpenEditCatBanner = (banner: CategoryBannerItem) => {
+    setEditingCatBannerId(banner.id)
+    setCatBannerTitle(banner.title)
+    setCatBannerBtnText(banner.buttonText || '')
+    setCatBannerLink(banner.linkUrl || '')
+    setCatBannerImageUrl(banner.imageUrl || '')
+    setShowCatBannerModal(true)
+  }
+
+  const handleSaveCategoryBanner = async () => {
+    if (!catBannerTitle.trim()) {
+      showToast('Por favor, informe o título da categoria.')
+      return
+    }
+
+    setIsSaving(true)
+
+    const payload = {
+      title: catBannerTitle.trim(),
+      button_text: catBannerBtnText.trim() || null,
+      link_url: catBannerLink.trim() || null,
+      image_url: catBannerImageUrl.trim() || null,
+      updated_at: new Date().toISOString(),
+    }
+
+    try {
+      if (editingCatBannerId) {
+        // Atualizar categoria existente
+        const { error: updateErr } = await supabase
+          .from('category_banners')
+          .update(payload)
+          .eq('id', editingCatBannerId)
+
+        if (updateErr) {
+          console.error('Erro ao atualizar categoria no Supabase:', updateErr)
+          showToast('Erro ao atualizar categoria: ' + updateErr.message)
+        } else {
+          const updated = (config.categoryBanners || []).map((cb) =>
+            cb.id === editingCatBannerId
+              ? {
+                  ...cb,
+                  title: payload.title,
+                  buttonText: payload.button_text || undefined,
+                  linkUrl: payload.link_url || undefined,
+                  imageUrl: payload.image_url || undefined,
+                }
+              : cb
+          )
+          const updatedConfig = { ...config, categoryBanners: updated }
+          setConfig(updatedConfig)
+          saveVitrineConfig(updatedConfig)
+          showToast('Banner de categoria atualizado!')
+        }
+      } else {
+        // Inserir nova categoria
+        const newSortOrder = (config.categoryBanners || []).length
+        const { data: inserted, error: insertErr } = await supabase
+          .from('category_banners')
+          .insert({
+            ...payload,
+            sort_order: newSortOrder,
+            is_active: true,
+          })
+          .select()
+          .single()
+
+        if (insertErr) {
+          console.error('Erro ao inserir categoria:', insertErr)
+          showToast('Erro ao salvar categoria: ' + insertErr.message)
+        } else if (inserted) {
+          const newCatItem: CategoryBannerItem = {
+            id: String(inserted.id),
+            title: inserted.title,
+            buttonText: inserted.button_text || undefined,
+            linkUrl: inserted.link_url || undefined,
+            imageUrl: inserted.image_url || undefined,
+            isActive: inserted.is_active,
+            sortOrder: inserted.sort_order,
+          }
+          const updatedConfig = {
+            ...config,
+            categoryBanners: [...(config.categoryBanners || []), newCatItem],
+          }
+          setConfig(updatedConfig)
+          saveVitrineConfig(updatedConfig)
+          showToast('Banner de categoria adicionado com sucesso!')
+        }
+      }
+    } catch (err) {
+      console.error('Falha geral ao salvar categoria:', err)
+      showToast('Erro ao salvar categoria.')
+    } finally {
+      setIsSaving(false)
+      setShowCatBannerModal(false)
+    }
+  }
+
+  const handleToggleCategoryBannerActive = async (id: string) => {
+    const target = (config.categoryBanners || []).find((cb) => cb.id === id)
+    if (!target) return
+
+    const newActiveState = !target.isActive
+    const updated = (config.categoryBanners || []).map((cb) =>
+      cb.id === id ? { ...cb, isActive: newActiveState } : cb
+    )
+    const updatedConfig = { ...config, categoryBanners: updated }
+    setConfig(updatedConfig)
+    saveVitrineConfig(updatedConfig)
+    showToast(newActiveState ? 'Categoria ativada!' : 'Categoria pausada!')
+
+    try {
+      await supabase
+        .from('category_banners')
+        .update({ is_active: newActiveState, updated_at: new Date().toISOString() })
+        .eq('id', id)
+    } catch (err) {
+      console.error('Erro ao alternar status da categoria:', err)
+    }
+  }
+
+  const handleDeleteCategoryBanner = async (id: string) => {
+    const updated = (config.categoryBanners || []).filter((cb) => cb.id !== id)
+    const updatedConfig = { ...config, categoryBanners: updated }
+    setConfig(updatedConfig)
+    saveVitrineConfig(updatedConfig)
+    showToast('Banner de categoria removido.')
+
+    try {
+      await supabase.from('category_banners').delete().eq('id', id)
+    } catch (err) {
+      console.error('Erro ao excluir categoria do banco:', err)
+    }
+  }
+
+  const handleMoveCategoryBannerOrder = async (id: string, direction: 'up' | 'down') => {
+    const list = [...(config.categoryBanners || [])]
+    const idx = list.findIndex((cb) => cb.id === id)
+    if (idx === -1) return
+    const targetIdx = direction === 'up' ? idx - 1 : idx + 1
+    if (targetIdx < 0 || targetIdx >= list.length) return
+
+    const temp = list[idx]
+    list[idx] = list[targetIdx]
+    list[targetIdx] = temp
+
+    const updatedConfig = { ...config, categoryBanners: list }
+    setConfig(updatedConfig)
+    saveVitrineConfig(updatedConfig)
+
+    try {
+      for (let i = 0; i < list.length; i++) {
+        await supabase
+          .from('category_banners')
+          .update({ sort_order: i })
+          .eq('id', list[i].id)
+      }
+    } catch (err) {
+      console.error('Erro ao sincronizar ordenação de categorias:', err)
+    }
   }
 
   // Salvar alterações gerais
-  const handleSaveAll = () => {
+  const handleSaveAll = async () => {
     setIsSaving(true)
-    saveVitrineConfig(config)
-    setTimeout(() => {
+    try {
+      // 1. Salvar configurações no Supabase
+      const { error: settingsErr } = await supabase
+        .from('vitrine_settings')
+        .upsert({
+          id: 'default',
+          section_title: config.sectionTitle,
+          section_subtitle: config.sectionSubtitle || null,
+          is_enabled: config.isEnabled,
+          auto_scroll: config.autoScroll,
+          auto_scroll_interval: config.autoScrollInterval,
+          featured_product_ids: config.featuredProductIds,
+          custom_tags: config.customTags,
+          categories_section_title: config.categoriesSectionTitle || 'Categorias',
+          categories_is_enabled: config.categoriesIsEnabled ?? true,
+          updated_at: new Date().toISOString(),
+        })
+
+      if (settingsErr) {
+        console.error('Erro ao salvar configurações de vitrine no Supabase:', settingsErr)
+      }
+
+      // 2. Atualizar ordenação dos banners
+      for (let i = 0; i < config.banners.length; i++) {
+        const b = config.banners[i]
+        await supabase
+          .from('banners')
+          .update({
+            sort_order: i,
+            is_active: b.isActive,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', b.id)
+      }
+
+      // 3. Atualizar ordenação dos banners de categoria
+      for (let i = 0; i < (config.categoryBanners || []).length; i++) {
+        const cb = config.categoryBanners[i]
+        await supabase
+          .from('category_banners')
+          .update({
+            sort_order: i,
+            is_active: cb.isActive,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', cb.id)
+      }
+
+      saveVitrineConfig(config)
+      showToast('Configurações do Carrossel Vitrine salvas no banco com sucesso!')
+    } catch (err) {
+      console.error('Erro ao salvar tudo:', err)
+      saveVitrineConfig(config)
+      showToast('Configurações salvas localmente.')
+    } finally {
       setIsSaving(false)
-      showToast('Configurações do Carrossel Vitrine salvas com sucesso!')
-    }, 250)
+    }
   }
 
   // Produtos filtrados para exibição na lista
@@ -498,7 +923,7 @@ export function CarrosselVitrinePage({ onBack, onNavigateToStore }: CarrosselVit
               fontFamily: 'inherit',
             }}
           >
-            <span>Banners & Slides</span>
+            <span>Banner Principal (Topo)</span>
             <span
               style={{
                 fontSize: '0.72rem',
@@ -510,6 +935,39 @@ export function CarrosselVitrinePage({ onBack, onNavigateToStore }: CarrosselVit
               }}
             >
               {config.banners.length}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab('categorias')}
+            style={{
+              padding: '0.75rem 1.25rem',
+              background: 'transparent',
+              border: 'none',
+              borderBottom: activeTab === 'categorias' ? '2px solid #000000' : '2px solid transparent',
+              color: activeTab === 'categorias' ? '#000000' : '#6b7280',
+              fontSize: '0.86rem',
+              fontWeight: 400,
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '0.5rem',
+              fontFamily: 'inherit',
+            }}
+          >
+            <span>Banners de Categoria</span>
+            <span
+              style={{
+                fontSize: '0.72rem',
+                backgroundColor: activeTab === 'categorias' ? '#000000' : '#f3f4f6',
+                color: activeTab === 'categorias' ? '#ffffff' : '#6b7280',
+                padding: '2px 7px',
+                borderRadius: '10px',
+                fontWeight: 400,
+              }}
+            >
+              {(config.categoryBanners || []).length}
             </span>
           </button>
 
@@ -1005,12 +1463,374 @@ export function CarrosselVitrinePage({ onBack, onNavigateToStore }: CarrosselVit
           </div>
         )}
 
-        {/* TAB 3: CONFIGURAÇÕES GERAIS */}
+        {/* TAB 3: BANNERS DE CATEGORIA */}
+        {activeTab === 'categorias' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+            {/* Cabeçalho da Aba */}
+            <div
+              style={{
+                backgroundColor: '#ffffff',
+                border: '1px solid #e5e7eb',
+                padding: '1.25rem',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                flexWrap: 'wrap',
+                gap: '1rem',
+              }}
+            >
+              <div>
+                <h3 style={{ margin: 0, fontSize: '0.95rem', fontWeight: 400, color: '#111827' }}>
+                  Banners de Categoria da Vitrine
+                </h3>
+                <p style={{ margin: '0.25rem 0 0', fontSize: '0.8rem', color: '#6b7280', fontWeight: 400 }}>
+                  Estes banners compõem a grade de categorias da loja virtual, direcionando clientes para coleções e lançamentos específicos.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleOpenAddCatBanner}
+                style={{
+                  padding: '0.55rem 1rem',
+                  fontSize: '0.78rem',
+                  fontWeight: 400,
+                  backgroundColor: '#000000',
+                  color: '#ffffff',
+                  border: '1px solid #000000',
+                  cursor: 'pointer',
+                  letterSpacing: '0.04em',
+                  textTransform: 'uppercase',
+                  fontFamily: 'inherit',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '0.4rem',
+                }}
+              >
+                + Adicionar Banner de Categoria
+              </button>
+            </div>
+
+            {/* Configuração rápida da seção de categorias */}
+            <div
+              style={{
+                backgroundColor: '#ffffff',
+                border: '1px solid #e5e7eb',
+                padding: '1rem 1.25rem',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                flexWrap: 'wrap',
+                gap: '1rem',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                <input
+                  type="checkbox"
+                  id="cat-section-enabled"
+                  checked={config.categoriesIsEnabled ?? true}
+                  onChange={(e) =>
+                    setConfig((prev) => ({ ...prev, categoriesIsEnabled: e.target.checked }))
+                  }
+                  style={{ width: '18px', height: '18px', accentColor: '#000000', cursor: 'pointer' }}
+                />
+                <label
+                  htmlFor="cat-section-enabled"
+                  style={{ fontSize: '0.84rem', color: '#111827', fontWeight: 400, cursor: 'pointer' }}
+                >
+                  Exibir seção de categorias na vitrine da loja
+                </label>
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <label
+                  htmlFor="cat-section-title"
+                  style={{ fontSize: '0.82rem', color: '#6b7280', fontWeight: 400 }}
+                >
+                  Título da Seção:
+                </label>
+                <input
+                  type="text"
+                  id="cat-section-title"
+                  value={config.categoriesSectionTitle || 'Categorias'}
+                  onChange={(e) =>
+                    setConfig((prev) => ({ ...prev, categoriesSectionTitle: e.target.value }))
+                  }
+                  style={{
+                    height: '32px',
+                    padding: '0 0.5rem',
+                    fontSize: '0.82rem',
+                    border: '1px solid #d1d5db',
+                    fontWeight: 400,
+                    width: '180px',
+                  }}
+                />
+              </div>
+            </div>
+
+            {/* Grade dos Banners de Categoria */}
+            <div style={{ backgroundColor: '#ffffff', border: '1px solid #e5e7eb' }}>
+              {(config.categoryBanners || []).length === 0 ? (
+                <div style={{ padding: '4rem 1.5rem', textAlign: 'center', color: '#6b7280', fontWeight: 400 }}>
+                  <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="#9ca3af" strokeWidth="1.25" style={{ margin: '0 auto 0.75rem' }}>
+                    <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+                    <circle cx="8.5" cy="8.5" r="1.5" />
+                    <polyline points="21 15 16 10 5 21" />
+                  </svg>
+                  <p style={{ margin: 0, fontSize: '0.88rem', color: '#111827', fontWeight: 400 }}>
+                    Nenhum banner de categoria cadastrado
+                  </p>
+                  <p style={{ margin: '0.25rem 0 0', fontSize: '0.8rem', color: '#6b7280', fontWeight: 400 }}>
+                    Clique em "+ Adicionar Banner de Categoria" para criar os cards da vitrine.
+                  </p>
+                </div>
+              ) : (
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))',
+                    gap: '1rem',
+                    padding: '1.25rem',
+                  }}
+                >
+                  {(config.categoryBanners || []).map((cb, idx) => (
+                    <div
+                      key={cb.id}
+                      style={{
+                        border: '1px solid #e5e7eb',
+                        backgroundColor: '#fafafa',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        overflow: 'hidden',
+                        position: 'relative',
+                      }}
+                    >
+                      {/* Prévia Visual do Banner */}
+                      <div
+                        style={{
+                          width: '100%',
+                          height: '160px',
+                          position: 'relative',
+                          backgroundColor: '#e5e7eb',
+                          overflow: 'hidden',
+                        }}
+                      >
+                        {cb.imageUrl ? (
+                          <img
+                            src={cb.imageUrl}
+                            alt={cb.title}
+                            style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                          />
+                        ) : (
+                          <div
+                            style={{
+                              width: '100%',
+                              height: '100%',
+                              display: 'flex',
+                              flexDirection: 'column',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              gap: '0.5rem',
+                              color: '#9ca3af',
+                            }}
+                          >
+                            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                              <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+                              <circle cx="8.5" cy="8.5" r="1.5" />
+                              <polyline points="21 15 16 10 5 21" />
+                            </svg>
+                            <span style={{ fontSize: '0.72rem', fontWeight: 400 }}>Espaço para o Banner</span>
+                          </div>
+                        )}
+
+                        {/* Overlay simulado */}
+                        <div
+                          style={{
+                            position: 'absolute',
+                            inset: 0,
+                            background: 'linear-gradient(to top, rgba(0,0,0,0.7) 0%, transparent 60%)',
+                            display: 'flex',
+                            alignItems: 'flex-end',
+                            justifyContent: 'space-between',
+                            padding: '1rem',
+                            color: '#ffffff',
+                          }}
+                        >
+                          <span style={{ fontSize: '0.95rem', fontWeight: 400, textTransform: 'uppercase' }}>
+                            {cb.title}
+                          </span>
+                          {cb.buttonText && (
+                            <span
+                              style={{
+                                fontSize: '0.68rem',
+                                fontWeight: 400,
+                                borderBottom: '1px solid #ffffff',
+                                paddingBottom: '1px',
+                                textTransform: 'uppercase',
+                              }}
+                            >
+                              {cb.buttonText}
+                            </span>
+                          )}
+                        </div>
+
+                        {/* Badge de Status */}
+                        <span
+                          style={{
+                            position: 'absolute',
+                            top: '8px',
+                            right: '8px',
+                            fontSize: '0.68rem',
+                            color: cb.isActive ? '#059669' : '#9ca3af',
+                            backgroundColor: cb.isActive ? 'rgba(236, 253, 245, 0.95)' : 'rgba(243, 244, 246, 0.95)',
+                            padding: '2px 7px',
+                            fontWeight: 400,
+                            border: `1px solid ${cb.isActive ? '#a7f3d0' : '#e5e7eb'}`,
+                            backdropFilter: 'blur(2px)',
+                          }}
+                        >
+                          {cb.isActive ? 'Ativo' : 'Pausado'}
+                        </span>
+                      </div>
+
+                      {/* Informações e Ações */}
+                      <div style={{ padding: '0.85rem 1rem', display: 'flex', flexDirection: 'column', gap: '0.4rem', flex: 1 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span style={{ fontSize: '0.84rem', color: '#111827', fontWeight: 400 }}>
+                            {cb.title}
+                          </span>
+                          <span style={{ fontSize: '0.72rem', color: '#6b7280', fontWeight: 400 }}>
+                            Ordem #{idx + 1}
+                          </span>
+                        </div>
+
+                        {cb.linkUrl && (
+                          <span style={{ fontSize: '0.74rem', color: '#9ca3af', fontWeight: 400, wordBreak: 'break-all' }}>
+                            Link: {cb.linkUrl}
+                          </span>
+                        )}
+
+                        <div
+                          style={{
+                            marginTop: 'auto',
+                            paddingTop: '0.75rem',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            borderTop: '1px solid #f3f4f6',
+                          }}
+                        >
+                          {/* Reordenação */}
+                          <div style={{ display: 'flex', gap: '2px' }}>
+                            <button
+                              type="button"
+                              onClick={() => handleMoveCategoryBannerOrder(cb.id, 'up')}
+                              disabled={idx === 0}
+                              style={{
+                                width: '26px',
+                                height: '26px',
+                                border: '1px solid #d1d5db',
+                                backgroundColor: '#ffffff',
+                                cursor: idx === 0 ? 'not-allowed' : 'pointer',
+                                opacity: idx === 0 ? 0.3 : 1,
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                fontSize: '0.72rem',
+                              }}
+                              title="Mover para a esquerda / cima"
+                            >
+                              ↑
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleMoveCategoryBannerOrder(cb.id, 'down')}
+                              disabled={idx === (config.categoryBanners || []).length - 1}
+                              style={{
+                                width: '26px',
+                                height: '26px',
+                                border: '1px solid #d1d5db',
+                                backgroundColor: '#ffffff',
+                                cursor: idx === (config.categoryBanners || []).length - 1 ? 'not-allowed' : 'pointer',
+                                opacity: idx === (config.categoryBanners || []).length - 1 ? 0.3 : 1,
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                fontSize: '0.72rem',
+                              }}
+                              title="Mover para a direita / baixo"
+                            >
+                              ↓
+                            </button>
+                          </div>
+
+                          {/* Ações */}
+                          <div style={{ display: 'flex', gap: '0.4rem' }}>
+                            <button
+                              type="button"
+                              onClick={() => handleToggleCategoryBannerActive(cb.id)}
+                              style={{
+                                padding: '0.3rem 0.6rem',
+                                fontSize: '0.74rem',
+                                border: '1px solid #d1d5db',
+                                backgroundColor: '#ffffff',
+                                color: '#374151',
+                                cursor: 'pointer',
+                                fontWeight: 400,
+                                fontFamily: 'inherit',
+                              }}
+                            >
+                              {cb.isActive ? 'Pausar' : 'Ativar'}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleOpenEditCatBanner(cb)}
+                              style={{
+                                padding: '0.3rem 0.6rem',
+                                fontSize: '0.74rem',
+                                border: '1px solid #d1d5db',
+                                backgroundColor: '#ffffff',
+                                color: '#374151',
+                                cursor: 'pointer',
+                                fontWeight: 400,
+                                fontFamily: 'inherit',
+                              }}
+                            >
+                              Editar
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteCategoryBanner(cb.id)}
+                              style={{
+                                padding: '0.3rem 0.6rem',
+                                fontSize: '0.74rem',
+                                border: '1px solid #fee2e2',
+                                backgroundColor: '#fff5f5',
+                                color: '#dc2626',
+                                cursor: 'pointer',
+                                fontWeight: 400,
+                                fontFamily: 'inherit',
+                              }}
+                            >
+                              Excluir
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* TAB 4: CONFIGURAÇÕES GERAIS */}
         {activeTab === 'configuracoes' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', maxWidth: '640px' }}>
             <div style={{ backgroundColor: '#ffffff', border: '1px solid #e5e7eb', padding: '1.5rem' }}>
               <h3 style={{ margin: '0 0 1.25rem 0', fontSize: '0.96rem', fontWeight: 400, color: '#111827' }}>
-                Configurações do Carrossel na Loja
+                Configurações do Carrossel de Produtos
               </h3>
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
@@ -1076,6 +1896,49 @@ export function CarrosselVitrinePage({ onBack, onNavigateToStore }: CarrosselVit
                     type="checkbox"
                     checked={config.autoScroll}
                     onChange={(e) => setConfig((prev) => ({ ...prev, autoScroll: e.target.checked }))}
+                    style={{ width: '18px', height: '18px', accentColor: '#000000', cursor: 'pointer' }}
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Configurações da Seção de Categorias */}
+            <div style={{ backgroundColor: '#ffffff', border: '1px solid #e5e7eb', padding: '1.5rem' }}>
+              <h3 style={{ margin: '0 0 1.25rem 0', fontSize: '0.96rem', fontWeight: 400, color: '#111827' }}>
+                Configurações da Grade de Categorias
+              </h3>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+                <div className="form-group-custom">
+                  <label htmlFor="cat-cfg-title" className="form-label-custom" style={{ fontWeight: 400 }}>
+                    Título da Seção de Categorias
+                  </label>
+                  <input
+                    type="text"
+                    id="cat-cfg-title"
+                    className="form-input-custom"
+                    value={config.categoriesSectionTitle || 'Categorias'}
+                    onChange={(e) => setConfig((prev) => ({ ...prev, categoriesSectionTitle: e.target.value }))}
+                    style={{ fontWeight: 400 }}
+                  />
+                  <span className="form-hint-msg" style={{ fontWeight: 400 }}>
+                    Padrão: "Categorias"
+                  </span>
+                </div>
+
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.75rem 0', borderTop: '1px solid #f3f4f6' }}>
+                  <div>
+                    <span style={{ fontSize: '0.86rem', color: '#111827', fontWeight: 400, display: 'block' }}>
+                      Exibir Grade de Categorias na Vitrine
+                    </span>
+                    <span style={{ fontSize: '0.76rem', color: '#6b7280', fontWeight: 400 }}>
+                      Se desativado, os banners de categorias ficam ocultos na loja.
+                    </span>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={config.categoriesIsEnabled ?? true}
+                    onChange={(e) => setConfig((prev) => ({ ...prev, categoriesIsEnabled: e.target.checked }))}
                     style={{ width: '18px', height: '18px', accentColor: '#000000', cursor: 'pointer' }}
                   />
                 </div>
@@ -1270,10 +2133,11 @@ export function CarrosselVitrinePage({ onBack, onNavigateToStore }: CarrosselVit
 
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
                 <div className="form-group-custom">
-                  <label className="form-label-custom" style={{ fontWeight: 400 }}>Texto do Botão</label>
+                  <label className="form-label-custom" style={{ fontWeight: 400 }}>Texto do Botão (opcional)</label>
                   <input
                     type="text"
                     className="form-input-custom"
+                    placeholder="Deixe em branco para sem botão"
                     value={bannerBtnText}
                     onChange={(e) => setBannerBtnText(e.target.value)}
                     style={{ fontWeight: 400 }}
@@ -1309,6 +2173,138 @@ export function CarrosselVitrinePage({ onBack, onNavigateToStore }: CarrosselVit
                 onClick={handleSaveBanner}
               >
                 Salvar Banner
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Adicionar / Editar Banner de Categoria */}
+      {showCatBannerModal && (
+        <div className="category-modal-overlay" onClick={() => setShowCatBannerModal(false)}>
+          <div className="category-modal-card" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '480px' }}>
+            <div className="category-modal-header">
+              <div>
+                <h3 className="category-modal-title" style={{ fontWeight: 400 }}>
+                  {editingCatBannerId ? 'Editar Banner de Categoria' : 'Adicionar Banner de Categoria'}
+                </h3>
+                <span className="category-modal-subtitle" style={{ fontWeight: 400 }}>
+                  Configure imagem, título e link do card de categoria
+                </span>
+              </div>
+              <button
+                type="button"
+                className="category-modal-close"
+                onClick={() => setShowCatBannerModal(false)}
+              >
+                &times;
+              </button>
+            </div>
+
+            <div className="category-modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+              <div className="form-group-custom">
+                <label className="form-label-custom" style={{ fontWeight: 400 }}>Imagem da Categoria (opcional)</label>
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                  <input
+                    type="text"
+                    className="form-input-custom"
+                    placeholder="URL da imagem ou faça upload..."
+                    value={catBannerImageUrl}
+                    onChange={(e) => setCatBannerImageUrl(e.target.value)}
+                    style={{ fontWeight: 400 }}
+                  />
+                  <input
+                    type="file"
+                    ref={catBannerFileInputRef}
+                    accept="image/*"
+                    style={{ display: 'none' }}
+                    onChange={handleCatBannerUpload}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => catBannerFileInputRef.current?.click()}
+                    disabled={isUploadingCatBanner}
+                    style={{
+                      padding: '0 0.85rem',
+                      fontSize: '0.76rem',
+                      fontWeight: 400,
+                      backgroundColor: '#f3f4f6',
+                      border: '1px solid #d1d5db',
+                      color: '#374151',
+                      cursor: isUploadingCatBanner ? 'not-allowed' : 'pointer',
+                      whiteSpace: 'nowrap',
+                      fontFamily: 'inherit',
+                    }}
+                  >
+                    {isUploadingCatBanner ? 'Enviando...' : 'Upload'}
+                  </button>
+                </div>
+                <span style={{ fontSize: '0.72rem', color: '#9ca3af', marginTop: '0.2rem', display: 'block' }}>
+                  Se não houver imagem, a vitrine exibirá o espaço reservado padrão.
+                </span>
+              </div>
+
+              {catBannerImageUrl && (
+                <div style={{ width: '100%', height: '110px', backgroundColor: '#e5e7eb', overflow: 'hidden' }}>
+                  <img src={catBannerImageUrl} alt="Prévia" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                </div>
+              )}
+
+              <div className="form-group-custom">
+                <label className="form-label-custom" style={{ fontWeight: 400 }}>Título da Categoria *</label>
+                <input
+                  type="text"
+                  className="form-input-custom"
+                  placeholder="Ex: Coleção Verão ou Lançamentos"
+                  value={catBannerTitle}
+                  onChange={(e) => setCatBannerTitle(e.target.value)}
+                  style={{ fontWeight: 400 }}
+                />
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                <div className="form-group-custom">
+                  <label className="form-label-custom" style={{ fontWeight: 400 }}>Texto do Botão / Link</label>
+                  <input
+                    type="text"
+                    className="form-input-custom"
+                    placeholder="Ex: CONFERIR"
+                    value={catBannerBtnText}
+                    onChange={(e) => setCatBannerBtnText(e.target.value)}
+                    style={{ fontWeight: 400 }}
+                  />
+                </div>
+                <div className="form-group-custom">
+                  <label className="form-label-custom" style={{ fontWeight: 400 }}>Link de Destino</label>
+                  <input
+                    type="text"
+                    className="form-input-custom"
+                    placeholder="/ ou /#produtos"
+                    value={catBannerLink}
+                    onChange={(e) => setCatBannerLink(e.target.value)}
+                    style={{ fontWeight: 400 }}
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="category-modal-footer">
+              <button
+                type="button"
+                className="btn-cancel-custom"
+                onClick={() => setShowCatBannerModal(false)}
+                style={{ fontWeight: 400 }}
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                className="btn-confirm-custom"
+                onClick={handleSaveCategoryBanner}
+                disabled={isSaving || isUploadingCatBanner}
+                style={{ fontWeight: 400 }}
+              >
+                {isSaving ? 'Gravando...' : editingCatBannerId ? 'Salvar Alterações' : 'Salvar Banner'}
               </button>
             </div>
           </div>

@@ -2,6 +2,85 @@ import { useState, useRef, useEffect, type ChangeEvent } from 'react'
 import { uploadFileToR2 } from '../lib/r2'
 import { supabase } from '../lib/supabase'
 
+export interface ProductMeasurements {
+  totalWidth?: string
+  lensWidth?: string
+  lensHeight?: string
+  bridge?: string
+  templeLength?: string
+}
+
+export function parseDescriptionAndMeasurements(rawDescription?: string | null): {
+  cleanDescription: string
+  measurements: ProductMeasurements
+} {
+  if (!rawDescription) {
+    return {
+      cleanDescription: '',
+      measurements: {
+        totalWidth: '',
+        lensWidth: '',
+        lensHeight: '',
+        bridge: '',
+        templeLength: '',
+      },
+    }
+  }
+
+  const match = rawDescription.match(/<!--MEASUREMENTS:(.*?)-->/)
+  let measurements: ProductMeasurements = {
+    totalWidth: '',
+    lensWidth: '',
+    lensHeight: '',
+    bridge: '',
+    templeLength: '',
+  }
+
+  if (match && match[1]) {
+    try {
+      const parsed = JSON.parse(match[1])
+      measurements = {
+        totalWidth: parsed.totalWidth ? String(parsed.totalWidth) : '',
+        lensWidth: parsed.lensWidth ? String(parsed.lensWidth) : '',
+        lensHeight: parsed.lensHeight ? String(parsed.lensHeight) : '',
+        bridge: parsed.bridge ? String(parsed.bridge) : '',
+        templeLength: parsed.templeLength ? String(parsed.templeLength) : '',
+      }
+    } catch (_) {}
+  }
+
+  const cleanDescription = rawDescription.replace(/<!--MEASUREMENTS:.*?-->\s*/, '').trim()
+  return { cleanDescription, measurements }
+}
+
+export function encodeDescriptionWithMeasurements(
+  cleanDescription: string,
+  measurements: ProductMeasurements
+): string {
+  const hasAnyMeasurement =
+    Boolean(measurements.totalWidth?.trim()) ||
+    Boolean(measurements.lensWidth?.trim()) ||
+    Boolean(measurements.lensHeight?.trim()) ||
+    Boolean(measurements.bridge?.trim()) ||
+    Boolean(measurements.templeLength?.trim())
+
+  const trimmedDesc = cleanDescription.trim()
+
+  if (!hasAnyMeasurement) {
+    return trimmedDesc
+  }
+
+  const payload = JSON.stringify({
+    totalWidth: measurements.totalWidth?.trim() || '',
+    lensWidth: measurements.lensWidth?.trim() || '',
+    lensHeight: measurements.lensHeight?.trim() || '',
+    bridge: measurements.bridge?.trim() || '',
+    templeLength: measurements.templeLength?.trim() || '',
+  })
+
+  return `<!--MEASUREMENTS:${payload}-->\n${trimmedDesc}`
+}
+
 export interface NewProductData {
   id: string
   name: string
@@ -24,6 +103,7 @@ export interface NewProductData {
   length: string
   width: string
   height: string
+  measurements?: ProductMeasurements
   visibility: 'visivel' | 'oculto' | 'rascunho'
   freeShipping: boolean
   freeShippingScope: 'brasil' | 'regional'
@@ -67,6 +147,13 @@ export function CriarProdutoPage({ onBack, onSave, editProductId }: CriarProduto
   const [length, setLength] = useState('')
   const [width, setWidth] = useState('')
   const [height, setHeight] = useState('')
+
+  // Medidas do produto (Padrão em mm)
+  const [totalWidth, setTotalWidth] = useState('')
+  const [lensWidth, setLensWidth] = useState('')
+  const [lensHeight, setLensHeight] = useState('')
+  const [bridge, setBridge] = useState('')
+  const [templeLength, setTempleLength] = useState('')
 
   // Estoque
   const [stock, setStock] = useState('')
@@ -141,6 +228,7 @@ export function CriarProdutoPage({ onBack, onSave, editProductId }: CriarProduto
             *,
             categories(id, name),
             product_images(image_url, sort_order, is_cover),
+            product_videos(video_url, sort_order),
             product_tags(tag_name)
           `)
           .eq('id', editProductId)
@@ -154,7 +242,44 @@ export function CriarProdutoPage({ onBack, onSave, editProductId }: CriarProduto
         if (data && isMounted) {
           setName(data.name || '')
           setSku(data.sku || '')
-          setDescription(data.description || '')
+          setBarcode(data.barcode || '')
+
+          // Extrair medidas e descrição limpa
+          const { cleanDescription, measurements: loadedMeas } =
+            parseDescriptionAndMeasurements(data.description)
+          setDescription(cleanDescription)
+
+          let savedLocalMeas: ProductMeasurements = {}
+          try {
+            const cached = localStorage.getItem(`lever_measurements_${editProductId}`)
+            if (cached) savedLocalMeas = JSON.parse(cached)
+          } catch (_) {}
+
+          setTotalWidth(
+            data.total_width !== null && data.total_width !== undefined
+              ? String(data.total_width)
+              : loadedMeas.totalWidth || savedLocalMeas.totalWidth || ''
+          )
+          setLensWidth(
+            data.lens_width !== null && data.lens_width !== undefined
+              ? String(data.lens_width)
+              : loadedMeas.lensWidth || savedLocalMeas.lensWidth || ''
+          )
+          setLensHeight(
+            data.lens_height !== null && data.lens_height !== undefined
+              ? String(data.lens_height)
+              : loadedMeas.lensHeight || savedLocalMeas.lensHeight || ''
+          )
+          setBridge(
+            data.bridge !== null && data.bridge !== undefined
+              ? String(data.bridge)
+              : loadedMeas.bridge || savedLocalMeas.bridge || ''
+          )
+          setTempleLength(
+            data.temple_length !== null && data.temple_length !== undefined
+              ? String(data.temple_length)
+              : loadedMeas.templeLength || savedLocalMeas.templeLength || ''
+          )
 
           const loadedCatName = Array.isArray(data.categories)
             ? data.categories[0]?.name
@@ -240,21 +365,60 @@ export function CriarProdutoPage({ onBack, onSave, editProductId }: CriarProduto
           setShowFreeShippingBadge(data.show_free_shipping_badge ?? true)
 
           // Fotos ordenadas
+          let loadedImgs: string[] = []
           if (Array.isArray(data.product_images) && data.product_images.length > 0) {
             const sortedImgs = [...data.product_images].sort(
               (a: any, b: any) => (a.sort_order ?? 0) - (b.sort_order ?? 0)
             )
-            setImages(sortedImgs.map((img: any) => img.image_url))
-          } else {
-            setImages([])
+            loadedImgs = sortedImgs.map((img: any) => img.image_url)
           }
 
-          // Tags
-          if (Array.isArray(data.product_tags) && data.product_tags.length > 0) {
-            setTags(data.product_tags.map((t: any) => t.tag_name))
-          } else {
-            setTags([])
+          if (loadedImgs.length === 0 && editProductId) {
+            const { data: directImgs } = await supabase
+              .from('product_images')
+              .select('image_url, sort_order')
+              .eq('product_id', editProductId)
+              .order('sort_order', { ascending: true })
+            if (directImgs && directImgs.length > 0) {
+              loadedImgs = directImgs.map((img: any) => img.image_url)
+            }
           }
+
+          setImages(loadedImgs)
+
+          // Vídeos
+          let loadedVideos: string[] = []
+          if (Array.isArray(data.product_videos) && data.product_videos.length > 0) {
+            const sortedVids = [...data.product_videos].sort(
+              (a: any, b: any) => (a.sort_order ?? 0) - (b.sort_order ?? 0)
+            )
+            loadedVideos = sortedVids.map((v: any) => v.video_url)
+          } else if (editProductId) {
+            const { data: directVids } = await supabase
+              .from('product_videos')
+              .select('video_url, sort_order')
+              .eq('product_id', editProductId)
+              .order('sort_order', { ascending: true })
+            if (directVids && directVids.length > 0) {
+              loadedVideos = directVids.map((v: any) => v.video_url)
+            }
+          }
+          setVideos(loadedVideos)
+
+          // Tags
+          let loadedTags: string[] = []
+          if (Array.isArray(data.product_tags) && data.product_tags.length > 0) {
+            loadedTags = data.product_tags.map((t: any) => t.tag_name)
+          } else if (editProductId) {
+            const { data: directTags } = await supabase
+              .from('product_tags')
+              .select('tag_name')
+              .eq('product_id', editProductId)
+            if (directTags && directTags.length > 0) {
+              loadedTags = directTags.map((t: any) => t.tag_name)
+            }
+          }
+          setTags(loadedTags)
         }
       } catch (err) {
         console.error('Falha geral ao carregar dados do produto:', err)
@@ -560,11 +724,24 @@ export function CriarProdutoPage({ onBack, onSave, editProductId }: CriarProduto
 
     const finalSku = sku.trim() || `LEV-${Math.floor(1000 + Math.random() * 9000)}`
 
+    const measurementsPayload: ProductMeasurements = {
+      totalWidth: totalWidth.trim(),
+      lensWidth: lensWidth.trim(),
+      lensHeight: lensHeight.trim(),
+      bridge: bridge.trim(),
+      templeLength: templeLength.trim(),
+    }
+
+    const finalDescription = encodeDescriptionWithMeasurements(
+      description,
+      measurementsPayload
+    )
+
     const newProduct: NewProductData = {
       id: String(Date.now()),
       name: name.trim(),
       sku: finalSku,
-      description: description.trim(),
+      description: finalDescription,
       category,
       tags,
       price,
@@ -581,6 +758,7 @@ export function CriarProdutoPage({ onBack, onSave, editProductId }: CriarProduto
       length: length.trim(),
       width: width.trim(),
       height: height.trim(),
+      measurements: measurementsPayload,
       visibility,
       freeShipping,
       freeShippingScope,
@@ -590,8 +768,17 @@ export function CriarProdutoPage({ onBack, onSave, editProductId }: CriarProduto
       createdAt: Date.now(),
     }
 
+    if (editProductId) {
+      try {
+        localStorage.setItem(
+          `lever_measurements_${editProductId}`,
+          JSON.stringify(measurementsPayload)
+        )
+      } catch (_) {}
+    }
+
     try {
-      // Obter id da categoria
+      // Obter id da categoria ou criar se não existir
       const { data: catData } = await supabase
         .from('categories')
         .select('id')
@@ -599,6 +786,32 @@ export function CriarProdutoPage({ onBack, onSave, editProductId }: CriarProduto
         .maybeSingle()
 
       let categoryId = catData?.id
+      if (!categoryId && category.trim()) {
+        const slug = category
+          .trim()
+          .toLowerCase()
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .replace(/[^a-z0-9]+/g, '-')
+          .replace(/(^-|-$)/g, '')
+
+        const { data: newCat } = await supabase
+          .from('categories')
+          .upsert(
+            {
+              name: category.trim(),
+              slug: slug || `cat-${Date.now()}`,
+              is_active: true,
+              sort_order: 99,
+            },
+            { onConflict: 'slug' }
+          )
+          .select('id')
+          .single()
+
+        categoryId = newCat?.id
+      }
+
       if (!categoryId) {
         const { data: firstCat } = await supabase
           .from('categories')
@@ -615,20 +828,29 @@ export function CriarProdutoPage({ onBack, onSave, editProductId }: CriarProduto
       const productPayload = {
         name: name.trim(),
         sku: finalSku,
-        description: description.trim() || null,
+        barcode: barcode.trim() || null,
+        description: finalDescription || null,
         category_id: categoryId,
         price: priceNum,
         promo_price: promoNum > 0 ? promoNum : null,
         cost_price: costPriceClean && costPriceClean > 0 ? costPriceClean : null,
         stock: parseInt(stock, 10) || 0,
         stock_location: stockLocation.trim() || null,
-        low_stock_alert: parseInt(lowStockAlert, 10) || 5,
+        low_stock_alert:
+          lowStockAlert !== '' && !isNaN(Number(lowStockAlert))
+            ? parseInt(lowStockAlert, 10)
+            : 5,
         track_stock: trackStock,
         continue_selling_out_of_stock: continueSellingOutOfStock,
         weight: parseFloat(weight.replace(',', '.')) || 0.25,
         length: parseFloat(length.replace(',', '.')) || 18,
         width: parseFloat(width.replace(',', '.')) || 12,
         height: parseFloat(height.replace(',', '.')) || 6,
+        total_width: totalWidth.trim() ? parseFloat(totalWidth.replace(',', '.')) : null,
+        lens_width: lensWidth.trim() ? parseFloat(lensWidth.replace(',', '.')) : null,
+        lens_height: lensHeight.trim() ? parseFloat(lensHeight.replace(',', '.')) : null,
+        bridge: bridge.trim() ? parseFloat(bridge.replace(',', '.')) : null,
+        temple_length: templeLength.trim() ? parseFloat(templeLength.replace(',', '.')) : null,
         visibility,
         free_shipping: freeShipping,
         free_shipping_scope: freeShippingScope,
@@ -637,13 +859,24 @@ export function CriarProdutoPage({ onBack, onSave, editProductId }: CriarProduto
 
       if (editProductId) {
         // Atualizar produto existente no Supabase
-        const { error: updateErr } = await supabase
+        const { data: updatedRows, error: updateErr } = await supabase
           .from('products')
           .update(productPayload)
           .eq('id', editProductId)
+          .select()
 
         if (updateErr) {
           console.error('Erro ao atualizar produto no Supabase:', updateErr)
+          alert('Erro ao atualizar produto no banco de dados: ' + updateErr.message)
+          setIsSaving(false)
+          return
+        }
+
+        if (!updatedRows || updatedRows.length === 0) {
+          console.warn('Nenhum registro atualizado no Supabase (verifique permissões de admin).')
+          alert('Atenção: A sessão de administrador pode ter expirado. Faça login novamente no painel para salvar as alterações no banco de dados.')
+          setIsSaving(false)
+          return
         }
 
         // Sincronizar imagens: deletar antigas e inserir novas atualizadas
@@ -656,7 +889,21 @@ export function CriarProdutoPage({ onBack, onSave, editProductId }: CriarProduto
             is_cover: idx === 0,
             sort_order: idx,
           }))
-          await supabase.from('product_images').insert(imagesPayload)
+          const { error: imgErr } = await supabase.from('product_images').insert(imagesPayload)
+          if (imgErr) console.error('Erro ao salvar imagens no Supabase:', imgErr)
+        }
+
+        // Sincronizar vídeos
+        await supabase.from('product_videos').delete().eq('product_id', editProductId)
+        if (videos.length > 0) {
+          const videosPayload = videos.map((url, idx) => ({
+            product_id: editProductId,
+            video_url: url,
+            cf_key: url.split('/').pop() || `vid-${idx}`,
+            sort_order: idx,
+          }))
+          const { error: vidErr } = await supabase.from('product_videos').insert(videosPayload)
+          if (vidErr) console.error('Erro ao salvar vídeos no Supabase:', vidErr)
         }
 
         // Sincronizar tags: deletar antigas e inserir novas
@@ -666,7 +913,8 @@ export function CriarProdutoPage({ onBack, onSave, editProductId }: CriarProduto
             product_id: editProductId,
             tag_name: t,
           }))
-          await supabase.from('product_tags').insert(tagsPayload)
+          const { error: tagErr } = await supabase.from('product_tags').insert(tagsPayload)
+          if (tagErr) console.error('Erro ao salvar tags no Supabase:', tagErr)
         }
 
         newProduct.id = editProductId
@@ -680,10 +928,19 @@ export function CriarProdutoPage({ onBack, onSave, editProductId }: CriarProduto
 
         if (prodErr) {
           console.error('Erro ao inserir produto no Supabase:', prodErr)
+          alert('Erro ao salvar produto no banco de dados: ' + prodErr.message)
+          setIsSaving(false)
+          return
         }
 
         if (insertedProduct) {
           newProduct.id = insertedProduct.id
+          try {
+            localStorage.setItem(
+              `lever_measurements_${insertedProduct.id}`,
+              JSON.stringify(measurementsPayload)
+            )
+          } catch (_) {}
 
           // Inserir imagens associadas
           if (images.length > 0) {
@@ -695,6 +952,17 @@ export function CriarProdutoPage({ onBack, onSave, editProductId }: CriarProduto
               sort_order: idx,
             }))
             await supabase.from('product_images').insert(imagesPayload)
+          }
+
+          // Inserir vídeos associados
+          if (videos.length > 0) {
+            const videosPayload = videos.map((url, idx) => ({
+              product_id: insertedProduct.id,
+              video_url: url,
+              cf_key: url.split('/').pop() || `vid-${idx}`,
+              sort_order: idx,
+            }))
+            await supabase.from('product_videos').insert(videosPayload)
           }
 
           // Inserir tags associadas
@@ -1463,7 +1731,150 @@ export function CriarProdutoPage({ onBack, onSave, editProductId }: CriarProduto
               </div>
             </section>
 
-            {/* 4. Dimensões de envio */}
+            {/* 4. Medidas do produto */}
+            <section className="product-form-card">
+              <div className="product-card-header">
+                <div className="header-title-row">
+                  <div>
+                    <h2 className="product-card-title" style={{ fontWeight: 400 }}>
+                      Medidas do produto
+                    </h2>
+                    <span className="product-card-desc" style={{ fontWeight: 400 }}>
+                      Dimensões técnicas da armação e lentes para orientação do cliente na loja
+                    </span>
+                  </div>
+                  <span className="specs-unit-badge" style={{ fontWeight: 400 }}>
+                    Padrão em mm
+                  </span>
+                </div>
+              </div>
+
+              <div className="product-card-body">
+                <div className="measurements-product-grid">
+                  {/* Largura total */}
+                  <div className="form-group-custom">
+                    <label htmlFor="dim-total-width" className="form-label-custom" style={{ fontWeight: 400 }}>
+                      Largura total
+                    </label>
+                    <div className="input-with-suffix">
+                      <input
+                        type="number"
+                        id="dim-total-width"
+                        className="form-input-custom"
+                        placeholder="Ex: 142"
+                        value={totalWidth}
+                        onChange={(e) => setTotalWidth(e.target.value)}
+                        style={{ fontWeight: 400 }}
+                      />
+                      <span className="input-suffix">mm</span>
+                    </div>
+                    <span className="form-hint-msg" style={{ fontWeight: 400 }}>Extremidade a extremidade</span>
+                  </div>
+
+                  {/* Largura da lente */}
+                  <div className="form-group-custom">
+                    <label htmlFor="dim-lens-width" className="form-label-custom" style={{ fontWeight: 400 }}>
+                      Largura da lente
+                    </label>
+                    <div className="input-with-suffix">
+                      <input
+                        type="number"
+                        id="dim-lens-width"
+                        className="form-input-custom"
+                        placeholder="Ex: 52"
+                        value={lensWidth}
+                        onChange={(e) => setLensWidth(e.target.value)}
+                        style={{ fontWeight: 400 }}
+                      />
+                      <span className="input-suffix">mm</span>
+                    </div>
+                    <span className="form-hint-msg" style={{ fontWeight: 400 }}>Diâmetro horizontal</span>
+                  </div>
+
+                  {/* Altura de lente */}
+                  <div className="form-group-custom">
+                    <label htmlFor="dim-lens-height" className="form-label-custom" style={{ fontWeight: 400 }}>
+                      Altura de lente
+                    </label>
+                    <div className="input-with-suffix">
+                      <input
+                        type="number"
+                        id="dim-lens-height"
+                        className="form-input-custom"
+                        placeholder="Ex: 46"
+                        value={lensHeight}
+                        onChange={(e) => setLensHeight(e.target.value)}
+                        style={{ fontWeight: 400 }}
+                      />
+                      <span className="input-suffix">mm</span>
+                    </div>
+                    <span className="form-hint-msg" style={{ fontWeight: 400 }}>Dimensão vertical da lente</span>
+                  </div>
+
+                  {/* Ponte */}
+                  <div className="form-group-custom">
+                    <label htmlFor="dim-bridge" className="form-label-custom" style={{ fontWeight: 400 }}>
+                      Ponte
+                    </label>
+                    <div className="input-with-suffix">
+                      <input
+                        type="number"
+                        id="dim-bridge"
+                        className="form-input-custom"
+                        placeholder="Ex: 19"
+                        value={bridge}
+                        onChange={(e) => setBridge(e.target.value)}
+                        style={{ fontWeight: 400 }}
+                      />
+                      <span className="input-suffix">mm</span>
+                    </div>
+                    <span className="form-hint-msg" style={{ fontWeight: 400 }}>Distância sobre o nariz</span>
+                  </div>
+
+                  {/* Comprimento das hastes */}
+                  <div className="form-group-custom">
+                    <label htmlFor="dim-temple-length" className="form-label-custom" style={{ fontWeight: 400 }}>
+                      Comprimento das hastes
+                    </label>
+                    <div className="input-with-suffix">
+                      <input
+                        type="number"
+                        id="dim-temple-length"
+                        className="form-input-custom"
+                        placeholder="Ex: 145"
+                        value={templeLength}
+                        onChange={(e) => setTempleLength(e.target.value)}
+                        style={{ fontWeight: 400 }}
+                      />
+                      <span className="input-suffix">mm</span>
+                    </div>
+                    <span className="form-hint-msg" style={{ fontWeight: 400 }}>Comprimento da haste</span>
+                  </div>
+                </div>
+
+                <div className="measurements-summary-bar">
+                  <div className="measurements-summary-icon">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                      <rect x="2" y="7" width="20" height="14" rx="2" ry="2" />
+                      <path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16" />
+                    </svg>
+                  </div>
+                  <div style={{ fontWeight: 400 }}>
+                    {totalWidth || lensWidth || lensHeight || bridge || templeLength ? (
+                      <span>
+                        Dimensões da armação: Largura total {totalWidth ? `${totalWidth} mm` : '—'} • Lente {lensWidth ? `${lensWidth} mm` : '—'} x {lensHeight ? `${lensHeight} mm` : '—'} • Ponte {bridge ? `${bridge} mm` : '—'} • Hastes {templeLength ? `${templeLength} mm` : '—'}
+                      </span>
+                    ) : (
+                      <span style={{ color: '#6b7280' }}>
+                        Nenhuma medida informada. Deixe em branco caso queira exibir o padrão do modelo na página.
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            {/* 5. Dimensões de envio */}
             <section className="product-form-card">
               <div className="product-card-header">
                 <div className="header-title-row">

@@ -254,21 +254,141 @@ export function DashboardPage({
     }
   }
 
-  const handleDuplicateProduct = (productId: string) => {
+  const handleDuplicateProduct = async (productId: string) => {
     const prod = products.find((p) => p.id === productId)
     if (!prod) return
-    const newId = String(Date.now())
-    const newSku = `${prod.sku}-COPY`
-    const newProduct: ProductItem = {
-      ...prod,
-      id: newId,
-      sku: newSku,
-      name: `${prod.name} (Cópia)`,
-      createdAt: Date.now(),
-    }
-    setProducts((prev) => [newProduct, ...prev])
-    showToast(`Produto duplicado com sucesso: ${newSku}`)
     setOpenProductMenuId(null)
+    showToast(`Duplicando produto "${prod.name}"...`)
+
+    try {
+      const { data: original, error: fetchErr } = await supabase
+        .from('products')
+        .select(`
+          *,
+          categories(name),
+          product_images(*),
+          product_tags(*)
+        `)
+        .eq('id', productId)
+        .single()
+
+      if (fetchErr || !original) {
+        console.error('Erro ao buscar produto original para duplicar:', fetchErr)
+        const newSku = `${prod.sku}-COPY-${Math.floor(100 + Math.random() * 900)}`
+        const { data: fallbackInserted } = await supabase
+          .from('products')
+          .insert({
+            name: `${prod.name} (Cópia)`,
+            sku: newSku,
+            price: prod.priceNumeric,
+            promo_price: prod.promoPriceNumeric || null,
+            stock: prod.stock,
+            visibility: prod.isHidden ? 'oculto' : 'visivel',
+          })
+          .select('*, categories(name)')
+          .single()
+
+        if (fallbackInserted) {
+          const newProductItem: ProductItem = {
+            id: fallbackInserted.id,
+            sku: fallbackInserted.sku,
+            name: fallbackInserted.name,
+            category: fallbackInserted.categories?.name || prod.category,
+            stock: fallbackInserted.stock,
+            price: `R$ ${Number(fallbackInserted.price).toFixed(2).replace('.', ',')}`,
+            priceNumeric: Number(fallbackInserted.price),
+            promoPrice: fallbackInserted.promo_price
+              ? `R$ ${Number(fallbackInserted.promo_price).toFixed(2).replace('.', ',')}`
+              : '',
+            promoPriceNumeric: fallbackInserted.promo_price
+              ? Number(fallbackInserted.promo_price)
+              : undefined,
+            isHidden: fallbackInserted.visibility === 'oculto',
+            createdAt: new Date(fallbackInserted.created_at).getTime(),
+          }
+          setProducts((prev) => [newProductItem, ...prev])
+          showToast(`Produto duplicado e salvo com sucesso: ${newSku}`)
+        }
+        return
+      }
+
+      const newSku = `${original.sku}-COPY-${Math.floor(100 + Math.random() * 900)}`
+      const { data: inserted, error: insertErr } = await supabase
+        .from('products')
+        .insert({
+          name: `${original.name} (Cópia)`,
+          sku: newSku,
+          description: original.description,
+          category_id: original.category_id,
+          price: original.price,
+          promo_price: original.promo_price,
+          cost_price: original.cost_price,
+          stock: original.stock,
+          stock_location: original.stock_location,
+          low_stock_alert: original.low_stock_alert,
+          track_stock: original.track_stock,
+          continue_selling_out_of_stock: original.continue_selling_out_of_stock,
+          weight: original.weight,
+          length: original.length,
+          width: original.width,
+          height: original.height,
+          visibility: original.visibility,
+          free_shipping: original.free_shipping,
+          free_shipping_scope: original.free_shipping_scope,
+          show_free_shipping_badge: original.show_free_shipping_badge,
+        })
+        .select('*, categories(name)')
+        .single()
+
+      if (insertErr || !inserted) {
+        console.error('Erro ao duplicar produto no Supabase:', insertErr)
+        showToast('Não foi possível duplicar o produto no banco de dados.')
+        return
+      }
+
+      // Duplicar imagens associadas
+      if (Array.isArray(original.product_images) && original.product_images.length > 0) {
+        const imagesPayload = original.product_images.map((img: any, idx: number) => ({
+          product_id: inserted.id,
+          image_url: img.image_url,
+          cf_key: img.cf_key || img.image_url?.split('/').pop() || `copy-img-${idx}`,
+          is_cover: img.is_cover,
+          sort_order: img.sort_order ?? idx,
+        }))
+        await supabase.from('product_images').insert(imagesPayload)
+      }
+
+      // Duplicar tags associadas
+      if (Array.isArray(original.product_tags) && original.product_tags.length > 0) {
+        const tagsPayload = original.product_tags.map((t: any) => ({
+          product_id: inserted.id,
+          tag_name: t.tag_name,
+        }))
+        await supabase.from('product_tags').insert(tagsPayload)
+      }
+
+      const newProductItem: ProductItem = {
+        id: inserted.id,
+        sku: inserted.sku,
+        name: inserted.name,
+        category: inserted.categories?.name || original.categories?.name || prod.category,
+        stock: inserted.stock,
+        price: `R$ ${Number(inserted.price).toFixed(2).replace('.', ',')}`,
+        priceNumeric: Number(inserted.price),
+        promoPrice: inserted.promo_price
+          ? `R$ ${Number(inserted.promo_price).toFixed(2).replace('.', ',')}`
+          : '',
+        promoPriceNumeric: inserted.promo_price ? Number(inserted.promo_price) : undefined,
+        isHidden: inserted.visibility === 'oculto',
+        createdAt: new Date(inserted.created_at).getTime(),
+      }
+
+      setProducts((prev) => [newProductItem, ...prev])
+      showToast(`Produto duplicado e salvo com sucesso: ${inserted.sku}`)
+    } catch (err) {
+      console.error('Falha geral ao duplicar produto:', err)
+      showToast('Erro ao duplicar o produto.')
+    }
   }
 
   const renderPaymentBadge = (status: OrderItem['paymentStatus']) => {
@@ -732,10 +852,10 @@ export function DashboardPage({
                     ) : (
                       orders.map((order, index) => {
                       const isMenuOpen = openMenuOrderId === order.id
-                      const isNearBottom = index >= orders.length - 2
+                      const isNearBottom = orders.length > 3 && index >= orders.length - 2
 
                       return (
-                        <tr key={order.id}>
+                        <tr key={order.id} style={{ position: 'relative', zIndex: isMenuOpen ? 50 : 1 }}>
                           <td>{order.number}</td>
                           <td>{order.date}</td>
                           <td>
@@ -753,7 +873,7 @@ export function DashboardPage({
                           <td>{renderPaymentBadge(order.paymentStatus)}</td>
                           <td>{renderShippingBadge(order.shippingStatus)}</td>
                           <td style={{ textAlign: 'right' }}>
-                            <div className="order-action-container">
+                            <div className="order-action-container" style={{ zIndex: isMenuOpen ? 100 : 'auto' }}>
                               <button
                                 type="button"
                                 className="order-action-btn"
@@ -1080,13 +1200,17 @@ export function DashboardPage({
                     ) : (
                       filteredProducts.map((product, index) => {
                         const isMenuOpen = openProductMenuId === product.id
-                        const isNearBottom = index >= filteredProducts.length - 2
+                        const isNearBottom = filteredProducts.length > 3 && index >= filteredProducts.length - 2
 
                         return (
                           <tr
                             key={product.id}
                             onClick={() => handleEditProduct(product.id)}
-                            style={{ cursor: 'pointer' }}
+                            style={{
+                              cursor: 'pointer',
+                              position: 'relative',
+                              zIndex: isMenuOpen ? 50 : 1,
+                            }}
                             title="Clique para editar este produto"
                           >
                             <td>
@@ -1132,7 +1256,7 @@ export function DashboardPage({
                               </span>
                             </td>
                             <td style={{ textAlign: 'right' }}>
-                              <div className="order-action-container">
+                              <div className="order-action-container" style={{ zIndex: isMenuOpen ? 100 : 'auto' }}>
                                 <button
                                   type="button"
                                   className="order-action-btn"
@@ -1183,6 +1307,35 @@ export function DashboardPage({
                                         <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
                                       </svg>
                                       editar produto
+                                    </button>
+
+                                    <button
+                                      type="button"
+                                      className="order-action-item"
+                                      onClick={() => {
+                                        try {
+                                          sessionStorage.setItem('lever_selected_product_id', product.id)
+                                        } catch (_) {}
+                                        window.open(`#produto?id=${product.id}`, '_blank')
+                                        setOpenProductMenuId(null)
+                                      }}
+                                      style={{ fontWeight: 400 }}
+                                    >
+                                      <svg
+                                        width="14"
+                                        height="14"
+                                        viewBox="0 0 24 24"
+                                        fill="none"
+                                        stroke="currentColor"
+                                        strokeWidth="2"
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                      >
+                                        <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+                                        <polyline points="15 3 21 3 21 9" />
+                                        <line x1="10" y1="14" x2="21" y2="3" />
+                                      </svg>
+                                      ver na loja
                                     </button>
 
                                     <button

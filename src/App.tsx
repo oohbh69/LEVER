@@ -1,4 +1,4 @@
-import { useRef, useState, useEffect } from 'react'
+import { useRef, useState, useEffect, useMemo } from 'react'
 import { ProdutoPage } from './pages/Produto'
 import { ContatoPage } from './pages/Contato'
 import { PoliticaFretePage } from './pages/PoliticaFrete'
@@ -13,7 +13,11 @@ import { CartProvider, useCart } from './context/CartContext'
 import { CartDrawer } from './components/CartDrawer'
 import { supabase } from './lib/supabase'
 import type { Session } from '@supabase/supabase-js'
-import { getVitrineConfig, type VitrineConfig } from './pages/CarrosselVitrine'
+import {
+  getVitrineConfig,
+  fetchVitrineConfigFromSupabase,
+  type VitrineConfig,
+} from './pages/CarrosselVitrine'
 
 type PageRoute =
   | 'home'
@@ -79,10 +83,11 @@ const INFO_BENEFITS: InfoBenefit[] = [
 
 function AppContent() {
   const getRouteFromUrl = (): PageRoute => {
-    const hash = window.location.hash.replace(/^#\/?/, '').toLowerCase()
+    const rawHash = window.location.hash.replace(/^#\/?/, '').toLowerCase()
+    const cleanHash = rawHash.split('?')[0]
     const pathname = window.location.pathname.replace(/^\/|\/$/g, '').toLowerCase()
 
-    const route = hash || pathname
+    const route = cleanHash || pathname
     switch (route) {
       case 'painel':
         return 'painel'
@@ -120,24 +125,66 @@ function AppContent() {
     }
   }
 
+  const getInitialProductId = (): string | null => {
+    if (typeof window === 'undefined') return null
+    const hashMatch = window.location.hash.match(/[#?&]id=([a-zA-Z0-9_-]+)/i)
+    const searchMatch = window.location.search.match(/[?&]id=([a-zA-Z0-9_-]+)/i)
+    return (
+      hashMatch?.[1] ||
+      searchMatch?.[1] ||
+      sessionStorage.getItem('lever_selected_product_id')
+    )
+  }
+
   const [currentPage, setCurrentPage] = useState<PageRoute>(getRouteFromUrl)
   const [selectedProductName, setSelectedProductName] = useState('')
+  const [selectedProductId, setSelectedProductId] = useState<string | null>(getInitialProductId)
   const [addedCardId, setAddedCardId] = useState<string | number | null>(null)
   const [favoriteProducts, setFavoriteProducts] = useState<Product[]>([])
   const [isLoadingProducts, setIsLoadingProducts] = useState(true)
   const [session, setSession] = useState<Session | null>(null)
   const [isAuthLoading, setIsAuthLoading] = useState(true)
   const [vitrineConfig, setVitrineConfig] = useState<VitrineConfig>(getVitrineConfig)
+  const [currentSlideIndex, setCurrentSlideIndex] = useState(0)
 
   useEffect(() => {
+    let isMounted = true
+
+    // Carregar banners e configurações reais do banco Supabase
+    fetchVitrineConfigFromSupabase().then((cfg) => {
+      if (isMounted && cfg) {
+        setVitrineConfig(cfg)
+      }
+    })
+
     const handleVitrineUpdate = () => {
       setVitrineConfig(getVitrineConfig())
     }
     window.addEventListener('vitrine-config-updated', handleVitrineUpdate)
     return () => {
+      isMounted = false
       window.removeEventListener('vitrine-config-updated', handleVitrineUpdate)
     }
   }, [])
+
+  const activeBanners = useMemo(
+    () => vitrineConfig.banners?.filter((b) => b.isActive) || [],
+    [vitrineConfig.banners]
+  )
+
+  const activeCategoryBanners = useMemo(
+    () => vitrineConfig.categoryBanners?.filter((b) => b.isActive) || [],
+    [vitrineConfig.categoryBanners]
+  )
+
+  // Autoplay para múltiplos banners (slideshow)
+  useEffect(() => {
+    if (activeBanners.length <= 1) return
+    const interval = setInterval(() => {
+      setCurrentSlideIndex((prev) => (prev + 1) % activeBanners.length)
+    }, 5500)
+    return () => clearInterval(interval)
+  }, [activeBanners.length])
 
   useEffect(() => {
     let isMounted = true
@@ -233,7 +280,24 @@ function AppContent() {
 
   useEffect(() => {
     const handleLocationChange = () => {
-      setCurrentPage(getRouteFromUrl())
+      const page = getRouteFromUrl()
+      setCurrentPage(page)
+
+      const hashMatch = window.location.hash.match(/[#?&]id=([a-zA-Z0-9_-]+)/i)
+      const searchMatch = window.location.search.match(/[?&]id=([a-zA-Z0-9_-]+)/i)
+      const foundId =
+        hashMatch?.[1] ||
+        searchMatch?.[1] ||
+        (typeof window !== 'undefined'
+          ? sessionStorage.getItem('lever_selected_product_id')
+          : null)
+      if (foundId) {
+        setSelectedProductId(foundId)
+        try {
+          sessionStorage.setItem('lever_selected_product_id', foundId)
+        } catch (_) {}
+      }
+
       window.scrollTo({ top: 0, behavior: 'smooth' })
     }
 
@@ -268,7 +332,7 @@ function AppContent() {
     document.title = routeTitles[currentPage] || 'LEVER'
   }, [currentPage, selectedProductName])
 
-  const navigateTo = (page: PageRoute) => {
+  const navigateTo = (page: PageRoute, prodId?: string) => {
     if (page === 'home') {
       window.history.pushState({}, '', '/')
       window.location.hash = ''
@@ -290,6 +354,14 @@ function AppContent() {
     } else if (page === 'carrossel-vitrine') {
       window.history.pushState({}, '', '/carrossel-vitrine')
       window.location.hash = ''
+    } else if (page === 'produto') {
+      const targetId =
+        prodId ||
+        selectedProductId ||
+        (typeof window !== 'undefined'
+          ? sessionStorage.getItem('lever_selected_product_id')
+          : null)
+      window.location.hash = targetId ? `produto?id=${targetId}` : 'produto'
     } else {
       window.location.hash = page
     }
@@ -324,7 +396,7 @@ function AppContent() {
     const x = e.pageX - carouselRef.current.offsetLeft
     const walk = x - startXRef.current
 
-    if (Math.abs(walk) > 4) {
+    if (Math.abs(walk) > 10) {
       hasMovedRef.current = true
       if (!isDragging) setIsDragging(true)
       carouselRef.current.scrollLeft = scrollLeftRef.current - walk
@@ -545,16 +617,16 @@ function AppContent() {
             {/* Espaço para o Banner ou Banner da Vitrine */}
             <section className="banner-area" aria-label="Banner">
               {(() => {
-                const activeBanner = vitrineConfig.banners?.find((b) => b.isActive)
-                if (activeBanner) {
+                if (activeBanners.length > 0) {
+                  const safeIndex = currentSlideIndex % activeBanners.length
+                  const activeBanner = activeBanners[safeIndex]
+
                   return (
                     <div
                       className="banner-active-container"
                       style={{
                         position: 'relative',
                         width: '100%',
-                        minHeight: '260px',
-                        maxHeight: '440px',
                         overflow: 'hidden',
                         cursor: activeBanner.linkUrl ? 'pointer' : 'default',
                       }}
@@ -570,48 +642,120 @@ function AppContent() {
                       }}
                     >
                       <img
+                        key={activeBanner.id}
                         src={activeBanner.imageUrl}
-                        alt={activeBanner.title}
-                        style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
-                      />
-                      <div
+                        alt={activeBanner.title || 'Banner promocional'}
                         style={{
-                          position: 'absolute',
-                          inset: 0,
-                          background: 'linear-gradient(to top, rgba(0,0,0,0.65) 0%, rgba(0,0,0,0.15) 60%, transparent 100%)',
-                          display: 'flex',
-                          flexDirection: 'column',
-                          justifyContent: 'flex-end',
-                          padding: '2rem 2.5rem',
-                          color: '#ffffff',
+                          width: '100%',
+                          height: 'auto',
+                          display: 'block',
+                          transition: 'opacity 0.4s ease-in-out',
                         }}
-                      >
-                        <h2 style={{ margin: 0, fontSize: '1.6rem', fontWeight: 400, letterSpacing: '-0.02em', textTransform: 'uppercase' }}>
-                          {activeBanner.title}
-                        </h2>
-                        {activeBanner.subtitle && (
-                          <p style={{ margin: '0.4rem 0 0', fontSize: '0.9rem', fontWeight: 400, opacity: 0.9 }}>
-                            {activeBanner.subtitle}
-                          </p>
-                        )}
-                        {activeBanner.buttonText && (
-                          <span
+                      />
+
+                      {/* Controles de navegação para múltiplos slides */}
+                      {activeBanners.length > 1 && (
+                        <>
+                          <button
+                            type="button"
+                            aria-label="Slide anterior"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              setCurrentSlideIndex((prev) =>
+                                (prev - 1 + activeBanners.length) % activeBanners.length
+                              )
+                            }}
                             style={{
-                              marginTop: '0.85rem',
-                              alignSelf: 'flex-start',
-                              padding: '0.45rem 1rem',
-                              backgroundColor: '#ffffff',
-                              color: '#000000',
-                              fontSize: '0.75rem',
-                              letterSpacing: '0.06em',
-                              textTransform: 'uppercase',
-                              fontWeight: 400,
+                              position: 'absolute',
+                              left: '16px',
+                              top: '50%',
+                              transform: 'translateY(-50%)',
+                              width: '36px',
+                              height: '36px',
+                              borderRadius: '50%',
+                              backgroundColor: 'rgba(0, 0, 0, 0.4)',
+                              color: '#ffffff',
+                              border: 'none',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              cursor: 'pointer',
+                              zIndex: 10,
+                              backdropFilter: 'blur(4px)',
                             }}
                           >
-                            {activeBanner.buttonText}
-                          </span>
-                        )}
-                      </div>
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <polyline points="15 18 9 12 15 6" />
+                            </svg>
+                          </button>
+
+                          <button
+                            type="button"
+                            aria-label="Próximo slide"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              setCurrentSlideIndex((prev) => (prev + 1) % activeBanners.length)
+                            }}
+                            style={{
+                              position: 'absolute',
+                              right: '16px',
+                              top: '50%',
+                              transform: 'translateY(-50%)',
+                              width: '36px',
+                              height: '36px',
+                              borderRadius: '50%',
+                              backgroundColor: 'rgba(0, 0, 0, 0.4)',
+                              color: '#ffffff',
+                              border: 'none',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              cursor: 'pointer',
+                              zIndex: 10,
+                              backdropFilter: 'blur(4px)',
+                            }}
+                          >
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <polyline points="9 18 15 12 9 6" />
+                            </svg>
+                          </button>
+
+                          {/* Indicadores de bolinhas (Dots) */}
+                          <div
+                            style={{
+                              position: 'absolute',
+                              bottom: '16px',
+                              left: '50%',
+                              transform: 'translateX(-50%)',
+                              display: 'flex',
+                              gap: '8px',
+                              zIndex: 10,
+                            }}
+                          >
+                            {activeBanners.map((_, idx) => (
+                              <button
+                                key={idx}
+                                type="button"
+                                aria-label={`Ir para slide ${idx + 1}`}
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  setCurrentSlideIndex(idx)
+                                }}
+                                style={{
+                                  width: idx === safeIndex ? '22px' : '8px',
+                                  height: '8px',
+                                  borderRadius: '4px',
+                                  backgroundColor: idx === safeIndex ? '#ffffff' : 'rgba(255, 255, 255, 0.5)',
+                                  border: 'none',
+                                  cursor: 'pointer',
+                                  padding: 0,
+                                  transition: 'all 0.3s ease',
+                                }}
+                              />
+                            ))}
+                          </div>
+                        </>
+                      )}
                     </div>
                   )
                 }
@@ -776,7 +920,11 @@ function AppContent() {
                       onClick={() => {
                         if (!hasMovedRef.current) {
                           setSelectedProductName(product.name)
-                          navigateTo('produto')
+                          setSelectedProductId(String(product.id))
+                          try {
+                            sessionStorage.setItem('lever_selected_product_id', String(product.id))
+                          } catch (_) {}
+                          navigateTo('produto', String(product.id))
                         }
                       }}
                     >
@@ -854,72 +1002,76 @@ function AppContent() {
             </section>
           )}
 
-            {/* Sessão Categorias */}
-            <section className="categories-section" aria-labelledby="categories-heading">
-              <div className="section-header">
-                <h2 id="categories-heading" className="section-title">
-                  Categorias
-                </h2>
-              </div>
+            {/* Sessão Categorias Dinâmica */}
+            {(vitrineConfig.categoriesIsEnabled ?? true) && activeCategoryBanners.length > 0 && (
+              <section className="categories-section" aria-labelledby="categories-heading">
+                <div className="section-header">
+                  <h2 id="categories-heading" className="section-title">
+                    {vitrineConfig.categoriesSectionTitle || 'Categorias'}
+                  </h2>
+                </div>
 
-              <div className="categories-grid">
-                {/* Banner 1: Coleção Verão */}
-                <article className="category-banner">
-                  <div className="category-banner-placeholder">
-                    <svg
-                      className="category-placeholder-icon"
-                      width="40"
-                      height="40"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="1.5"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
+                <div className="categories-grid">
+                  {activeCategoryBanners.map((catBanner) => (
+                    <article
+                      key={catBanner.id}
+                      className="category-banner"
+                      onClick={() => {
+                        if (catBanner.linkUrl) {
+                          if (catBanner.linkUrl.startsWith('/')) {
+                            const page = catBanner.linkUrl.replace(/^\//, '') as PageRoute
+                            navigateTo(page || 'home')
+                          } else {
+                            window.location.href = catBanner.linkUrl
+                          }
+                        }
+                      }}
                     >
-                      <circle cx="12" cy="12" r="5" />
-                      <line x1="12" y1="1" x2="12" y2="3" />
-                      <line x1="12" y1="21" x2="12" y2="23" />
-                      <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" />
-                      <line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
-                      <line x1="1" y1="12" x2="3" y2="12" />
-                      <line x1="21" y1="12" x2="23" y2="12" />
-                      <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" />
-                      <line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
-                    </svg>
-                    <span className="category-placeholder-tag">Espaço para o Banner</span>
-                  </div>
-                  <div className="category-banner-overlay">
-                    <h3 className="category-banner-title">Coleção Verão</h3>
-                    <span className="category-banner-link">CONFERIR</span>
-                  </div>
-                </article>
+                      {catBanner.imageUrl ? (
+                        <img
+                          src={catBanner.imageUrl}
+                          alt={catBanner.title}
+                          style={{
+                            position: 'absolute',
+                            inset: 0,
+                            width: '100%',
+                            height: '100%',
+                            objectFit: 'cover',
+                            transition: 'transform 0.4s ease',
+                          }}
+                        />
+                      ) : (
+                        <div className="category-banner-placeholder">
+                          <svg
+                            className="category-placeholder-icon"
+                            width="40"
+                            height="40"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="1.5"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          >
+                            <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+                            <circle cx="8.5" cy="8.5" r="1.5" />
+                            <polyline points="21 15 16 10 5 21" />
+                          </svg>
+                          <span className="category-placeholder-tag">Espaço para o Banner</span>
+                        </div>
+                      )}
 
-                {/* Banner 2: Lançamentos */}
-                <article className="category-banner">
-                  <div className="category-banner-placeholder">
-                    <svg
-                      className="category-placeholder-icon"
-                      width="40"
-                      height="40"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="1.5"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    >
-                      <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
-                    </svg>
-                    <span className="category-placeholder-tag">Espaço para o Banner</span>
-                  </div>
-                  <div className="category-banner-overlay">
-                    <h3 className="category-banner-title">Lançamentos</h3>
-                    <span className="category-banner-link">CONFERIR</span>
-                  </div>
-                </article>
-              </div>
-            </section>
+                      <div className="category-banner-overlay">
+                        <h3 className="category-banner-title">{catBanner.title}</h3>
+                        {catBanner.buttonText && (
+                          <span className="category-banner-link">{catBanner.buttonText}</span>
+                        )}
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              </section>
+            )}
 
             {/* Sessão Informativa */}
             <section className="info-benefits-section" aria-label="Informações e Diferenciais">
@@ -945,7 +1097,8 @@ function AppContent() {
         {/* Páginas do Rodapé e Produto */}
         {currentPage === 'produto' && (
           <ProdutoPage
-            productTitle={selectedProductName || 'Óculos de Sol LEVER Blackout Acetato UV400'}
+            productId={selectedProductId}
+            productTitle={selectedProductName || undefined}
           />
         )}
         {currentPage === 'checkout' && (
