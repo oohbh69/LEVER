@@ -11,6 +11,8 @@ import { PainelPage } from './pages/Painel'
 import { DashboardPage } from './pages/Dashboard'
 import { CartProvider, useCart, parsePriceToNumber } from './context/CartContext'
 import { CartDrawer } from './components/CartDrawer'
+import { supabase } from './lib/supabase'
+import type { Session } from '@supabase/supabase-js'
 
 type PageRoute =
   | 'home'
@@ -151,6 +153,24 @@ function AppContent() {
   const [currentPage, setCurrentPage] = useState<PageRoute>(getRouteFromUrl)
   const [selectedProductName, setSelectedProductName] = useState('')
   const [addedCardId, setAddedCardId] = useState<number | null>(null)
+  const [session, setSession] = useState<Session | null>(null)
+  const [isAuthLoading, setIsAuthLoading] = useState(true)
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session)
+      setIsAuthLoading(false)
+    })
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session)
+      setIsAuthLoading(false)
+    })
+
+    return () => subscription.unsubscribe()
+  }, [])
   const { openCart, totalItems, addItem } = useCart()
   const announcementText = 'ENVIO GRÁTIS A PARTIR DE R$ 199,90'
   const repeatCount = 5
@@ -260,24 +280,59 @@ function AppContent() {
     }, 50)
   }
 
-  if (currentPage === 'painel') {
-    return <PainelPage onLogin={() => navigateTo('dashboard')} />
-  }
+  const isDashboardRoute =
+    currentPage === 'painel' ||
+    currentPage === 'dashboard' ||
+    currentPage === 'criar-produto' ||
+    currentPage === 'frete' ||
+    currentPage === 'cupom'
 
-  if (currentPage === 'dashboard') {
-    return <DashboardPage />
-  }
+  if (isDashboardRoute) {
+    if (isAuthLoading) {
+      return (
+        <div
+          style={{
+            minHeight: '100vh',
+            width: '100%',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            backgroundColor: '#fafafa',
+            color: '#6b7280',
+            fontSize: '0.85rem',
+            fontWeight: 400,
+          }}
+        >
+          Carregando...
+        </div>
+      )
+    }
 
-  if (currentPage === 'criar-produto') {
-    return <DashboardPage initialTab="criar-produto" />
-  }
+    if (!session) {
+      return (
+        <PainelPage
+          onLogin={() => {
+            navigateTo(currentPage === 'painel' ? 'dashboard' : currentPage)
+          }}
+          onBackToStore={() => navigateTo('home')}
+        />
+      )
+    }
 
-  if (currentPage === 'frete') {
-    return <DashboardPage initialTab="frete" />
-  }
+    const initialTab =
+      currentPage === 'painel' || currentPage === 'dashboard'
+        ? 'dashboard'
+        : currentPage
 
-  if (currentPage === 'cupom') {
-    return <DashboardPage initialTab="cupom" />
+    return (
+      <DashboardPage
+        initialTab={initialTab}
+        onLogout={() => {
+          navigateTo('painel')
+        }}
+        onNavigateToStore={() => navigateTo('home')}
+      />
+    )
   }
 
   return (

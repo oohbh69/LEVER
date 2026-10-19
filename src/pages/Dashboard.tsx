@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { supabase } from '../lib/supabase'
 import { CriarProdutoPage, type NewProductData } from './CriarProduto'
 import { CriarFretePage } from './CriarFrete'
 import { CriarCupomPage } from './CriarCupom'
@@ -37,9 +38,15 @@ const initialProducts: ProductItem[] = []
 
 interface DashboardPageProps {
   initialTab?: TabType
+  onLogout?: () => void
+  onNavigateToStore?: () => void
 }
 
-export function DashboardPage({ initialTab = 'dashboard' }: DashboardPageProps = {}) {
+export function DashboardPage({
+  initialTab = 'dashboard',
+  onLogout,
+  onNavigateToStore,
+}: DashboardPageProps = {}) {
   const [activeTab, setActiveTab] = useState<TabType>(initialTab)
   const [orders, setOrders] = useState<OrderItem[]>(initialOrders)
   const [products, setProducts] = useState<ProductItem[]>(initialProducts)
@@ -73,6 +80,14 @@ export function DashboardPage({ initialTab = 'dashboard' }: DashboardPageProps =
       setActiveTab(initialTab)
     }
   }, [initialTab])
+
+  const handleLogout = async () => {
+    try {
+      await supabase.auth.signOut()
+    } finally {
+      onLogout?.()
+    }
+  }
 
   // Estados de Filtros e Busca de Produtos
   const [productSearch, setProductSearch] = useState('')
@@ -369,6 +384,53 @@ export function DashboardPage({ initialTab = 'dashboard' }: DashboardPageProps =
             Cupom
           </button>
         </nav>
+
+        <div style={{ marginTop: 'auto', padding: '1rem', borderTop: '1px solid #e5e7eb', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+          {onNavigateToStore && (
+            <button
+              type="button"
+              className="dashboard-nav-item"
+              onClick={onNavigateToStore}
+              style={{ padding: '0.55rem 0.75rem', fontSize: '0.8rem', color: '#4b5563', borderRadius: '6px' }}
+            >
+              <svg
+                className="dashboard-nav-icon"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.75"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+                <polyline points="9 22 9 12 15 12 15 22" />
+              </svg>
+              Ver Loja
+            </button>
+          )}
+
+          <button
+            type="button"
+            className="dashboard-nav-item"
+            onClick={handleLogout}
+            style={{ padding: '0.55rem 0.75rem', fontSize: '0.8rem', color: '#ef4444', borderRadius: '6px' }}
+          >
+            <svg
+              className="dashboard-nav-icon"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.75"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+              <polyline points="16 17 21 12 16 7" />
+              <line x1="21" y1="12" x2="9" y2="12" />
+            </svg>
+            Sair
+          </button>
+        </div>
       </aside>
 
       {/* Área Principal de Conteúdo */}
