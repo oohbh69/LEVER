@@ -1,4 +1,4 @@
-import { useState, useRef, type ChangeEvent } from 'react'
+import { useState, useRef, useEffect, type ChangeEvent } from 'react'
 import { uploadFileToR2 } from '../lib/r2'
 import { supabase } from '../lib/supabase'
 
@@ -81,9 +81,121 @@ export function CriarProdutoPage({ onBack, onSave }: CriarProdutoProps) {
   const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false)
   const [newCategoryName, setNewCategoryName] = useState('')
   const [categoryModalError, setCategoryModalError] = useState('')
+  const [categoryToDelete, setCategoryToDelete] = useState<string | null>(null)
+  const [isDeletingCategory, setIsDeletingCategory] = useState(false)
   const [barcode, setBarcode] = useState('')
   const [tagInput, setTagInput] = useState('')
   const [tags, setTags] = useState<string[]>([])
+
+  // Carregar categorias ativas do Supabase
+  useEffect(() => {
+    let isMounted = true
+
+    async function loadCategories() {
+      try {
+        const { data, error } = await supabase
+          .from('categories')
+          .select('name')
+          .eq('is_active', true)
+          .order('sort_order', { ascending: true })
+
+        if (error) {
+          console.error('Erro ao buscar categorias:', error)
+          return
+        }
+
+        if (data && data.length > 0 && isMounted) {
+          const names = data.map((c: any) => c.name)
+          setCategoriesList(names)
+          setCategory((current) => (names.includes(current) ? current : names[0]))
+        }
+      } catch (err) {
+        console.error('Falha ao carregar categorias do Supabase:', err)
+      }
+    }
+
+    loadCategories()
+
+    return () => {
+      isMounted = false
+    }
+  }, [])
+
+  // Criar nova categoria
+  const handleCreateCategory = async () => {
+    const trimmed = newCategoryName.trim()
+    if (!trimmed) {
+      setCategoryModalError('Informe o nome da categoria.')
+      return
+    }
+    if (categoriesList.some((c) => c.toLowerCase() === trimmed.toLowerCase())) {
+      setCategoryModalError('Esta categoria já existe na lista.')
+      return
+    }
+
+    const updated = [...categoriesList, trimmed]
+    setCategoriesList(updated)
+    setCategory(trimmed)
+    setIsCategoryModalOpen(false)
+    setNewCategoryName('')
+    setCategoryModalError('')
+
+    try {
+      const slug = trimmed
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/(^-|-$)/g, '')
+
+      await supabase.from('categories').upsert(
+        {
+          name: trimmed,
+          slug: slug || `cat-${Date.now()}`,
+          is_active: true,
+          sort_order: updated.length,
+        },
+        { onConflict: 'slug' }
+      )
+    } catch (err) {
+      console.error('Erro ao salvar nova categoria:', err)
+    }
+  }
+
+  // Excluir categoria
+  const handleConfirmDeleteCategory = async () => {
+    if (!categoryToDelete) return
+    const targetName = categoryToDelete
+    setIsDeletingCategory(true)
+
+    const updated = categoriesList.filter((c) => c !== targetName)
+    setCategoriesList(updated)
+
+    if (category === targetName) {
+      setCategory(updated.length > 0 ? updated[0] : '')
+    }
+
+    try {
+      // Tentar deletar diretamente
+      const { error } = await supabase
+        .from('categories')
+        .delete()
+        .ilike('name', targetName)
+
+      // Se houver produtos associados (restrição FK), inativar logicamente
+      if (error) {
+        await supabase
+          .from('categories')
+          .update({ is_active: false })
+          .ilike('name', targetName)
+      }
+    } catch (err) {
+      console.error('Erro ao excluir categoria:', err)
+    } finally {
+      setIsDeletingCategory(false)
+      setCategoryToDelete(null)
+    }
+  }
 
   // Visibilidade
   const [visibility, setVisibility] = useState<'visivel' | 'oculto' | 'rascunho'>('visivel')
@@ -1535,24 +1647,56 @@ export function CriarProdutoPage({ onBack, onSave }: CriarProdutoProps) {
               </div>
 
               <div className="product-side-card-body">
-                {/* Seleção de Categoria: puramente por seleção, sem digitação */}
+                {/* Seleção de Categoria */}
                 <div className="form-group-custom">
                   <label htmlFor="prod-cat" className="form-label-custom">
                     Categoria principal <span className="required-star">*</span>
                   </label>
 
-                  <select
-                    id="prod-cat"
-                    className="form-select-custom"
-                    value={category}
-                    onChange={(e) => setCategory(e.target.value)}
-                  >
-                    {categoriesList.map((cat) => (
-                      <option key={cat} value={cat}>
-                        {cat}
-                      </option>
-                    ))}
-                  </select>
+                  <div className="category-select-row">
+                    <select
+                      id="prod-cat"
+                      className="form-select-custom"
+                      value={category}
+                      onChange={(e) => setCategory(e.target.value)}
+                    >
+                      {categoriesList.length === 0 && (
+                        <option value="">Nenhuma categoria cadastrada</option>
+                      )}
+                      {categoriesList.map((cat) => (
+                        <option key={cat} value={cat}>
+                          {cat}
+                        </option>
+                      ))}
+                    </select>
+
+                    {category && (
+                      <button
+                        type="button"
+                        className="category-delete-inline-btn"
+                        onClick={() => setCategoryToDelete(category)}
+                        title={`Excluir categoria "${category}"`}
+                        aria-label={`Excluir categoria "${category}"`}
+                      >
+                        <svg
+                          width="14"
+                          height="14"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="1.5"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        >
+                          <polyline points="3 6 5 6 21 6" />
+                          <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                          <line x1="10" y1="11" x2="10" y2="17" />
+                          <line x1="14" y1="11" x2="14" y2="17" />
+                        </svg>
+                        <span>Excluir</span>
+                      </button>
+                    )}
+                  </div>
 
                   <span className="form-hint-msg">
                     A categoria é selecionada exclusivamente pela lista.
@@ -1562,46 +1706,106 @@ export function CriarProdutoPage({ onBack, onSave }: CriarProdutoProps) {
                 {/* Seleção rápida em botões */}
                 <div className="category-quick-chips-group">
                   <span className="category-chips-label">Categorias cadastradas:</span>
-                  <div className="category-chips-list">
-                    {categoriesList.map((cat) => (
-                      <button
-                        key={cat}
-                        type="button"
-                        className={`category-chip-btn ${category === cat ? 'active' : ''}`}
-                        onClick={() => setCategory(cat)}
-                      >
-                        {category === cat && <span>✓ </span>}
-                        {cat}
-                      </button>
-                    ))}
-                  </div>
+                  {categoriesList.length === 0 ? (
+                    <p style={{ margin: '0.25rem 0', fontSize: '0.75rem', color: '#9ca3af', fontWeight: 400 }}>
+                      Nenhuma categoria cadastrada no momento.
+                    </p>
+                  ) : (
+                    <div className="category-chips-list">
+                      {categoriesList.map((cat) => (
+                        <div
+                          key={cat}
+                          className={`category-chip-item ${category === cat ? 'active' : ''}`}
+                        >
+                          <button
+                            type="button"
+                            className="category-chip-select-part"
+                            onClick={() => setCategory(cat)}
+                          >
+                            {category === cat && <span>✓ </span>}
+                            <span>{cat}</span>
+                          </button>
+                          <button
+                            type="button"
+                            className="category-chip-remove-part"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              setCategoryToDelete(cat)
+                            }}
+                            title={`Excluir categoria "${cat}"`}
+                            aria-label={`Excluir categoria "${cat}"`}
+                          >
+                            <svg
+                              width="12"
+                              height="12"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="1.5"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                            >
+                              <line x1="18" y1="6" x2="6" y2="18" />
+                              <line x1="6" y1="6" x2="18" y2="18" />
+                            </svg>
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
 
-                {/* Botão Criar Categoria */}
-                <button
-                  type="button"
-                  className="category-create-trigger-btn"
-                  onClick={() => {
-                    setNewCategoryName('')
-                    setCategoryModalError('')
-                    setIsCategoryModalOpen(true)
-                  }}
-                >
-                  <svg
-                    width="14"
-                    height="14"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1.5"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
+                {/* Botões de Ação de Categoria */}
+                <div className="category-actions-bar">
+                  <button
+                    type="button"
+                    className="category-create-trigger-btn"
+                    onClick={() => {
+                      setNewCategoryName('')
+                      setCategoryModalError('')
+                      setIsCategoryModalOpen(true)
+                    }}
                   >
-                    <line x1="12" y1="5" x2="12" y2="19" />
-                    <line x1="5" y1="12" x2="19" y2="12" />
-                  </svg>
-                  Criar categoria
-                </button>
+                    <svg
+                      width="14"
+                      height="14"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.5"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <line x1="12" y1="5" x2="12" y2="19" />
+                      <line x1="5" y1="12" x2="19" y2="12" />
+                    </svg>
+                    Nova categoria
+                  </button>
+
+                  {category && (
+                    <button
+                      type="button"
+                      className="category-delete-trigger-btn"
+                      onClick={() => setCategoryToDelete(category)}
+                      title={`Excluir categoria "${category}"`}
+                    >
+                      <svg
+                        width="14"
+                        height="14"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.5"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
+                        <polyline points="3 6 5 6 21 6" />
+                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                      </svg>
+                      Excluir categoria
+                    </button>
+                  )}
+                </div>
 
                 {/* Tags do Produto */}
                 <div className="form-group-custom">
@@ -1781,20 +1985,7 @@ export function CriarProdutoPage({ onBack, onSave }: CriarProdutoProps) {
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') {
                       e.preventDefault()
-                      const trimmed = newCategoryName.trim()
-                      if (!trimmed) {
-                        setCategoryModalError('Informe o nome da categoria.')
-                        return
-                      }
-                      if (categoriesList.some((c) => c.toLowerCase() === trimmed.toLowerCase())) {
-                        setCategoryModalError('Esta categoria já existe na lista.')
-                        return
-                      }
-                      setCategoriesList((prev) => [...prev, trimmed])
-                      setCategory(trimmed)
-                      setIsCategoryModalOpen(false)
-                      setNewCategoryName('')
-                      setCategoryModalError('')
+                      handleCreateCategory()
                     }
                   }}
                   autoFocus
@@ -1809,6 +2000,7 @@ export function CriarProdutoPage({ onBack, onSave }: CriarProdutoProps) {
               <button
                 type="button"
                 className="product-create-discard-btn"
+                style={{ fontWeight: 400 }}
                 onClick={() => setIsCategoryModalOpen(false)}
               >
                 Cancelar
@@ -1816,24 +2008,94 @@ export function CriarProdutoPage({ onBack, onSave }: CriarProdutoProps) {
               <button
                 type="button"
                 className="product-create-save-btn"
-                onClick={() => {
-                  const trimmed = newCategoryName.trim()
-                  if (!trimmed) {
-                    setCategoryModalError('Informe o nome da categoria.')
-                    return
-                  }
-                  if (categoriesList.some((c) => c.toLowerCase() === trimmed.toLowerCase())) {
-                    setCategoryModalError('Esta categoria já existe na lista.')
-                    return
-                  }
-                  setCategoriesList((prev) => [...prev, trimmed])
-                  setCategory(trimmed)
-                  setIsCategoryModalOpen(false)
-                  setNewCategoryName('')
-                  setCategoryModalError('')
-                }}
+                style={{ fontWeight: 400 }}
+                onClick={handleCreateCategory}
               >
                 Criar categoria
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Confirmar Exclusão de Categoria */}
+      {categoryToDelete && (
+        <div
+          className="category-modal-overlay"
+          onClick={() => !isDeletingCategory && setCategoryToDelete(null)}
+        >
+          <div
+            className="category-modal-card"
+            onClick={(e) => e.stopPropagation()}
+            style={{ maxWidth: '420px' }}
+          >
+            <div className="category-modal-header">
+              <div>
+                <h3 className="category-modal-title" style={{ fontWeight: 400 }}>
+                  Excluir categoria
+                </h3>
+                <span className="category-modal-subtitle" style={{ fontWeight: 400 }}>
+                  Esta ação removerá a categoria da lista de opções.
+                </span>
+              </div>
+              <button
+                type="button"
+                className="category-modal-close"
+                onClick={() => !isDeletingCategory && setCategoryToDelete(null)}
+                aria-label="Fechar modal"
+              >
+                &times;
+              </button>
+            </div>
+
+            <div className="category-modal-body">
+              <p
+                style={{
+                  margin: 0,
+                  fontSize: '0.86rem',
+                  color: '#374151',
+                  fontWeight: 400,
+                  lineHeight: '1.5',
+                }}
+              >
+                Tem certeza de que deseja excluir a categoria{' '}
+                <span style={{ color: '#111111', fontWeight: 400, textDecoration: 'underline' }}>
+                  "{categoryToDelete}"
+                </span>
+                ?
+              </p>
+            </div>
+
+            <div className="category-modal-footer">
+              <button
+                type="button"
+                className="product-create-discard-btn"
+                style={{ fontWeight: 400 }}
+                onClick={() => setCategoryToDelete(null)}
+                disabled={isDeletingCategory}
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                style={{
+                  fontWeight: 400,
+                  backgroundColor: '#dc2626',
+                  color: '#ffffff',
+                  border: '1px solid #dc2626',
+                  padding: '0.6rem 1.15rem',
+                  fontSize: '0.78rem',
+                  cursor: isDeletingCategory ? 'not-allowed' : 'pointer',
+                  letterSpacing: '0.04em',
+                  textTransform: 'uppercase',
+                  borderRadius: 0,
+                  transition: 'background-color 0.15s ease',
+                  fontFamily: 'inherit',
+                }}
+                onClick={handleConfirmDeleteCategory}
+                disabled={isDeletingCategory}
+              >
+                {isDeletingCategory ? 'Excluindo...' : 'Excluir categoria'}
               </button>
             </div>
           </div>

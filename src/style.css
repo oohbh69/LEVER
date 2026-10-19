@@ -7075,28 +7075,109 @@ body {
   gap: 0.4rem;
 }
 
-.category-chip-btn {
-  background-color: #f9fafb;
+.category-select-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.category-delete-inline-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  height: 40px;
+  padding: 0 0.85rem;
+  background-color: #ffffff;
   border: 1px solid #e5e7eb;
   border-radius: 0;
-  padding: 0.35rem 0.65rem;
-  font-size: 0.75rem;
-  color: #374151;
+  color: #6b7280;
+  font-size: 0.76rem;
+  font-weight: 400 !important;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
   cursor: pointer;
   transition: all 0.15s ease;
+  white-space: nowrap;
   font-family: inherit;
 }
 
-.category-chip-btn:hover {
-  border-color: #000000;
-  color: #000000;
-  background-color: #ffffff;
+.category-delete-inline-btn:hover {
+  border-color: #dc2626;
+  color: #dc2626;
+  background-color: #fff5f5;
 }
 
-.category-chip-btn.active {
+.category-chip-item {
+  display: inline-flex;
+  align-items: center;
+  background-color: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 0;
+  transition: all 0.15s ease;
+}
+
+.category-chip-item:hover {
+  border-color: #d1d5db;
+}
+
+.category-chip-item.active {
   background-color: #000000;
   border-color: #000000;
+}
+
+.category-chip-select-part {
+  background: transparent;
+  border: none;
+  padding: 0.35rem 0.55rem;
+  font-size: 0.75rem;
+  font-weight: 400 !important;
+  color: #374151;
+  cursor: pointer;
+  font-family: inherit;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.category-chip-item.active .category-chip-select-part {
   color: #ffffff;
+}
+
+.category-chip-remove-part {
+  background: transparent;
+  border: none;
+  border-left: 1px solid #e5e7eb;
+  padding: 0.35rem 0.45rem;
+  color: #9ca3af;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.15s ease;
+}
+
+.category-chip-item.active .category-chip-remove-part {
+  border-left-color: rgba(255, 255, 255, 0.25);
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.category-chip-remove-part:hover {
+  color: #dc2626 !important;
+}
+
+.category-actions-bar {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+  margin-top: 0.85rem;
+  margin-bottom: 1.25rem;
+}
+
+@media (max-width: 480px) {
+  .category-actions-bar {
+    grid-template-columns: 1fr;
+  }
 }
 
 .category-create-trigger-btn {
@@ -7111,11 +7192,11 @@ body {
   border-radius: 0;
   color: #111111;
   font-size: 0.76rem;
+  font-weight: 400 !important;
   letter-spacing: 0.04em;
   text-transform: uppercase;
   cursor: pointer;
-  margin-top: 0.85rem;
-  margin-bottom: 1.25rem;
+  margin: 0;
   transition: all 0.15s ease;
   font-family: inherit;
 }
@@ -7123,6 +7204,32 @@ body {
 .category-create-trigger-btn:hover {
   background-color: #000000;
   color: #ffffff;
+}
+
+.category-delete-trigger-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  width: 100%;
+  height: 38px;
+  background-color: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 0;
+  color: #dc2626;
+  font-size: 0.76rem;
+  font-weight: 400 !important;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+  margin: 0;
+  transition: all 0.15s ease;
+  font-family: inherit;
+}
+
+.category-delete-trigger-btn:hover {
+  border-color: #dc2626;
+  background-color: #fef2f2;
 }
 
 /* Modal Criar Categoria */
