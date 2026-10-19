@@ -9,7 +9,7 @@ import { TrocasDevolucoesPage } from './pages/TrocasDevolucoes'
 import { CheckoutPage } from './pages/Checkout'
 import { PainelPage } from './pages/Painel'
 import { DashboardPage } from './pages/Dashboard'
-import { CartProvider, useCart, parsePriceToNumber } from './context/CartContext'
+import { CartProvider, useCart } from './context/CartContext'
 import { CartDrawer } from './components/CartDrawer'
 import { supabase } from './lib/supabase'
 import type { Session } from '@supabase/supabase-js'
@@ -32,11 +32,13 @@ type PageRoute =
   | 'cupom'
 
 interface Product {
-  id: number
+  id: string | number
   name: string
   price: string
+  priceNumeric: number
   installments: string
   tag?: string
+  imageUrl?: string
 }
 
 interface InfoBenefit {
@@ -70,42 +72,6 @@ const INFO_BENEFITS: InfoBenefit[] = [
     icon: '💳',
     title: 'Até 6x sem juros',
     description: 'no cartão ou no Pix',
-  },
-]
-
-const FAVORITE_PRODUCTS: Product[] = [
-  {
-    id: 1,
-    name: 'Camiseta Oversized Minimalist',
-    price: 'R$ 149,90',
-    installments: '3x de R$ 49,96 sem juros',
-    tag: 'Mais Vendido',
-  },
-  {
-    id: 2,
-    name: 'Moletom Boxy Heavyweight',
-    price: 'R$ 299,90',
-    installments: '6x de R$ 49,98 sem juros',
-    tag: 'Destaque',
-  },
-  {
-    id: 3,
-    name: 'Calça Cargo Utility Pants',
-    price: 'R$ 259,90',
-    installments: '5x de R$ 51,98 sem juros',
-  },
-  {
-    id: 4,
-    name: 'Jaqueta Corta-Vento Street',
-    price: 'R$ 329,90',
-    installments: '6x de R$ 54,98 sem juros',
-    tag: 'Novo',
-  },
-  {
-    id: 5,
-    name: 'Boné Dad Hat Classic',
-    price: 'R$ 119,90',
-    installments: '2x de R$ 59,95 sem juros',
   },
 ]
 
@@ -152,9 +118,67 @@ function AppContent() {
 
   const [currentPage, setCurrentPage] = useState<PageRoute>(getRouteFromUrl)
   const [selectedProductName, setSelectedProductName] = useState('')
-  const [addedCardId, setAddedCardId] = useState<number | null>(null)
+  const [addedCardId, setAddedCardId] = useState<string | number | null>(null)
+  const [favoriteProducts, setFavoriteProducts] = useState<Product[]>([])
+  const [isLoadingProducts, setIsLoadingProducts] = useState(true)
   const [session, setSession] = useState<Session | null>(null)
   const [isAuthLoading, setIsAuthLoading] = useState(true)
+
+  useEffect(() => {
+    let isMounted = true
+
+    async function fetchVitrineProducts() {
+      try {
+        setIsLoadingProducts(true)
+        const { data, error } = await supabase
+          .from('products')
+          .select('*, product_images(*)')
+          .eq('visibility', 'visivel')
+          .order('created_at', { ascending: false })
+
+        if (error) {
+          console.error('Erro ao buscar produtos da vitrine:', error)
+          return
+        }
+
+        if (data && isMounted) {
+          const list: Product[] = data.map((item: any) => {
+            const rawPrice = Number(item.price) || 0
+            const promo = item.promo_price ? Number(item.promo_price) : null
+            const finalPrice = promo && promo > 0 && promo < rawPrice ? promo : rawPrice
+            const installmentsCalc = (finalPrice / 3).toFixed(2).replace('.', ',')
+
+            const coverImg = item.product_images?.find((img: any) => img.is_cover)?.image_url
+            const firstImg = item.product_images?.[0]?.image_url
+            const primaryImg = coverImg || firstImg || undefined
+
+            return {
+              id: item.id,
+              name: item.name,
+              price: `R$ ${finalPrice.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+              priceNumeric: finalPrice,
+              installments: `3x de R$ ${installmentsCalc} sem juros`,
+              tag: promo && promo > 0 && promo < rawPrice ? 'Promoção' : undefined,
+              imageUrl: primaryImg,
+            }
+          })
+          setFavoriteProducts(list)
+        }
+      } catch (err) {
+        console.error('Erro ao conectar com a vitrine:', err)
+      } finally {
+        if (isMounted) {
+          setIsLoadingProducts(false)
+        }
+      }
+    }
+
+    fetchVitrineProducts()
+
+    return () => {
+      isMounted = false
+    }
+  }, [])
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -511,107 +535,210 @@ function AppContent() {
                   Os Queridinhos
                 </h2>
 
-                <div className="carousel-controls">
-                  <button
-                    type="button"
-                    className="carousel-nav-btn"
-                    onClick={() => handleScroll('left')}
-                    aria-label="Produto anterior"
-                  >
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <polyline points="15 18 9 12 15 6" />
-                    </svg>
-                  </button>
-
-                  <button
-                    type="button"
-                    className="carousel-nav-btn"
-                    onClick={() => handleScroll('right')}
-                    aria-label="Próximo produto"
-                  >
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <polyline points="9 18 15 12 9 6" />
-                    </svg>
-                  </button>
-                </div>
-              </div>
-
-              <div
-                className={`carousel-container ${isDragging ? 'is-dragging' : ''}`}
-                ref={carouselRef}
-                onPointerDown={handlePointerDown}
-                onPointerMove={handlePointerMove}
-                onPointerUp={handlePointerUpOrCancel}
-                onPointerCancel={handlePointerUpOrCancel}
-                onClickCapture={(e) => {
-                  if (hasMovedRef.current) {
-                    e.stopPropagation()
-                    e.preventDefault()
-                  }
-                }}
-              >
-                {FAVORITE_PRODUCTS.map((product) => (
-                  <article
-                    key={product.id}
-                    className="product-card"
-                    onClick={() => {
-                      if (!hasMovedRef.current) {
-                        setSelectedProductName(product.name)
-                        navigateTo('produto')
-                      }
-                    }}
-                  >
-                    <div className="product-placeholder-box">
-                      {product.tag && (
-                        <span className="product-tag">{product.tag}</span>
-                      )}
-                      <div className="product-placeholder-icon">
-                        <svg
-                          width="32"
-                          height="32"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="1.5"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                        >
-                          <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-                          <line x1="3" y1="9" x2="21" y2="9" />
-                          <line x1="9" y1="21" x2="9" y2="9" />
-                        </svg>
-                      </div>
-                    </div>
-
-                    <div className="product-info">
-                      <h3 className="product-name">{product.name}</h3>
-                      <p className="product-price">{product.price}</p>
-                      <span className="product-installments">{product.installments}</span>
-                    </div>
+                {favoriteProducts.length > 0 && (
+                  <div className="carousel-controls">
+                    <button
+                      type="button"
+                      className="carousel-nav-btn"
+                      onClick={() => handleScroll('left')}
+                      aria-label="Produto anterior"
+                    >
+                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="15 18 9 12 15 6" />
+                      </svg>
+                    </button>
 
                     <button
                       type="button"
-                      className="product-add-btn"
-                      aria-label={`Adicionar ${product.name} ao carrinho`}
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        addItem({
-                          id: product.id,
-                          name: product.name,
-                          price: parsePriceToNumber(product.price),
-                          priceFormatted: product.price,
-                          installments: product.installments,
-                          tag: product.tag,
-                        })
-                        setAddedCardId(product.id)
-                        setTimeout(() => setAddedCardId(null), 1500)
+                      className="carousel-nav-btn"
+                      onClick={() => handleScroll('right')}
+                      aria-label="Próximo produto"
+                    >
+                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="9 18 15 12 9 6" />
+                      </svg>
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {isLoadingProducts ? (
+                <div
+                  style={{
+                    padding: '3.5rem 1.5rem',
+                    textAlign: 'center',
+                    color: '#6b7280',
+                    fontWeight: 400,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '0.75rem',
+                  }}
+                >
+                  <div
+                    style={{
+                      width: '26px',
+                      height: '26px',
+                      border: '2px solid #e5e7eb',
+                      borderTopColor: '#111827',
+                      borderRadius: '50%',
+                      animation: 'spinLoading 0.8s linear infinite',
+                    }}
+                  />
+                  <p style={{ margin: 0, fontSize: '0.85rem', fontWeight: 400, color: '#6b7280', letterSpacing: '0.02em' }}>
+                    Carregando vitrine...
+                  </p>
+                </div>
+              ) : favoriteProducts.length === 0 ? (
+                <div
+                  style={{
+                    padding: '4rem 1.5rem',
+                    textAlign: 'center',
+                    backgroundColor: '#fafafa',
+                    border: '1px solid #f3f4f6',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '0.75rem',
+                  }}
+                >
+                  <svg
+                    width="36"
+                    height="36"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="#9ca3af"
+                    strokeWidth="1.25"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+                    <line x1="3" y1="9" x2="21" y2="9" />
+                    <line x1="9" y1="21" x2="9" y2="9" />
+                  </svg>
+                  <h3
+                    style={{
+                      margin: 0,
+                      fontSize: '0.95rem',
+                      fontWeight: 400,
+                      color: '#111827',
+                      letterSpacing: '-0.01em',
+                    }}
+                  >
+                    Nenhum produto cadastrado na vitrine
+                  </h3>
+                  <p
+                    style={{
+                      margin: 0,
+                      fontSize: '0.85rem',
+                      fontWeight: 400,
+                      color: '#6b7280',
+                      maxWidth: '380px',
+                      lineHeight: '1.5',
+                    }}
+                  >
+                    Novos modelos e lançamentos exclusivos da coleção estarão disponíveis em breve.
+                  </p>
+                </div>
+              ) : (
+                <div
+                  className={`carousel-container ${isDragging ? 'is-dragging' : ''}`}
+                  ref={carouselRef}
+                  onPointerDown={handlePointerDown}
+                  onPointerMove={handlePointerMove}
+                  onPointerUp={handlePointerUpOrCancel}
+                  onPointerCancel={handlePointerUpOrCancel}
+                  onClickCapture={(e) => {
+                    if (hasMovedRef.current) {
+                      e.stopPropagation()
+                      e.preventDefault()
+                    }
+                  }}
+                >
+                  {favoriteProducts.map((product) => (
+                    <article
+                      key={product.id}
+                      className="product-card"
+                      onClick={() => {
+                        if (!hasMovedRef.current) {
+                          setSelectedProductName(product.name)
+                          navigateTo('produto')
+                        }
                       }}
                     >
-                      {addedCardId === product.id ? 'ADICIONADO ✓' : 'ADICIONAR'}
-                    </button>
-                  </article>
-                ))}
-              </div>
+                      <div className="product-placeholder-box">
+                        {product.tag && (
+                          <span className="product-tag" style={{ fontWeight: 400 }}>
+                            {product.tag}
+                          </span>
+                        )}
+                        {product.imageUrl ? (
+                          <img
+                            src={product.imageUrl}
+                            alt={product.name}
+                            loading="lazy"
+                            style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                          />
+                        ) : (
+                          <div className="product-placeholder-icon">
+                            <svg
+                              width="32"
+                              height="32"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="1.5"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                            >
+                              <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+                              <line x1="3" y1="9" x2="21" y2="9" />
+                              <line x1="9" y1="21" x2="9" y2="9" />
+                            </svg>
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="product-info">
+                        <h3 className="product-name" style={{ fontWeight: 400 }}>
+                          {product.name}
+                        </h3>
+                        <p className="product-price" style={{ fontWeight: 400 }}>
+                          {product.price}
+                        </p>
+                        <span className="product-installments" style={{ fontWeight: 400 }}>
+                          {product.installments}
+                        </span>
+                      </div>
+
+                      <button
+                        type="button"
+                        className="product-add-btn"
+                        style={{ fontWeight: 400 }}
+                        aria-label={`Adicionar ${product.name} ao carrinho`}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          addItem({
+                            id: product.id,
+                            name: product.name,
+                            price: product.priceNumeric,
+                            priceFormatted: product.price,
+                            installments: product.installments,
+                            image: product.imageUrl,
+                            tag: product.tag,
+                          })
+                          setAddedCardId(product.id)
+                          setTimeout(() => setAddedCardId(null), 1500)
+                        }}
+                      >
+                        {addedCardId === product.id ? 'ADICIONADO ✓' : 'ADICIONAR'}
+                      </button>
+                    </article>
+                  ))}
+                </div>
+              )}
             </section>
 
             {/* Sessão Categorias */}

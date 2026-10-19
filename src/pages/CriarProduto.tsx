@@ -1,5 +1,6 @@
 import { useState, useRef, type ChangeEvent } from 'react'
 import { uploadFileToR2 } from '../lib/r2'
+import { supabase } from '../lib/supabase'
 
 export interface NewProductData {
   id: string
@@ -277,7 +278,7 @@ export function CriarProdutoPage({ onBack, onSave }: CriarProdutoProps) {
   }
 
   // Submissão do produto
-  const handleSaveProduct = () => {
+  const handleSaveProduct = async () => {
     const errors: { name?: string; price?: string } = {}
     if (!name.trim()) {
       errors.name = 'Informe o nome do produto'
@@ -326,10 +327,91 @@ export function CriarProdutoPage({ onBack, onSave }: CriarProdutoProps) {
       createdAt: Date.now(),
     }
 
-    setTimeout(() => {
+    try {
+      // Obter id da categoria
+      const { data: catData } = await supabase
+        .from('categories')
+        .select('id')
+        .ilike('name', category)
+        .maybeSingle()
+
+      let categoryId = catData?.id
+      if (!categoryId) {
+        const { data: firstCat } = await supabase
+          .from('categories')
+          .select('id')
+          .limit(1)
+          .single()
+        categoryId = firstCat?.id
+      }
+
+      const costPriceClean = costPrice
+        ? parseFloat(costPrice.replace(/[^\d,]/g, '').replace(',', '.'))
+        : null
+
+      const { data: insertedProduct, error: prodErr } = await supabase
+        .from('products')
+        .insert({
+          name: name.trim(),
+          sku: finalSku,
+          description: description.trim() || null,
+          category_id: categoryId,
+          price: priceNum,
+          promo_price: promoNum > 0 ? promoNum : null,
+          cost_price: costPriceClean && costPriceClean > 0 ? costPriceClean : null,
+          stock: parseInt(stock, 10) || 0,
+          stock_location: stockLocation.trim() || null,
+          low_stock_alert: parseInt(lowStockAlert, 10) || 5,
+          track_stock: trackStock,
+          continue_selling_out_of_stock: continueSellingOutOfStock,
+          weight: parseFloat(weight.replace(',', '.')) || 0.25,
+          length: parseFloat(length.replace(',', '.')) || 18,
+          width: parseFloat(width.replace(',', '.')) || 12,
+          height: parseFloat(height.replace(',', '.')) || 6,
+          visibility,
+          free_shipping: freeShipping,
+          free_shipping_scope: freeShippingScope,
+          show_free_shipping_badge: showFreeShippingBadge,
+        })
+        .select()
+        .single()
+
+      if (prodErr) {
+        console.error('Erro ao inserir produto no Supabase:', prodErr)
+      }
+
+      if (insertedProduct) {
+        newProduct.id = insertedProduct.id
+
+        // Inserir imagens associadas
+        if (images.length > 0) {
+          const imagesPayload = images.map((url, idx) => ({
+            product_id: insertedProduct.id,
+            image_url: url,
+            cf_key: url.split('/').pop() || `img-${idx}`,
+            is_cover: idx === 0,
+            sort_order: idx,
+          }))
+          await supabase.from('product_images').insert(imagesPayload)
+        }
+
+        // Inserir tags associadas
+        if (tags.length > 0) {
+          const tagsPayload = tags.map((t) => ({
+            product_id: insertedProduct.id,
+            tag_name: t,
+          }))
+          await supabase.from('product_tags').insert(tagsPayload)
+        }
+      }
+
       onSave(newProduct)
+    } catch (err) {
+      console.error('Falha geral ao salvar no Supabase:', err)
+      onSave(newProduct)
+    } finally {
       setIsSaving(false)
-    }, 350)
+    }
   }
 
   return (

@@ -81,6 +81,50 @@ export function DashboardPage({
     }
   }, [initialTab])
 
+  // Carregar produtos reais do Supabase
+  useEffect(() => {
+    let isMounted = true
+
+    async function loadProducts() {
+      try {
+        const { data, error } = await supabase
+          .from('products')
+          .select('*, categories(name)')
+          .order('created_at', { ascending: false })
+
+        if (error) {
+          console.error('Erro ao carregar produtos no dashboard:', error)
+          return
+        }
+
+        if (data && isMounted) {
+          const mapped: ProductItem[] = data.map((p: any) => ({
+            id: p.id,
+            sku: p.sku,
+            name: p.name,
+            category: p.categories?.name || 'Eyewear',
+            stock: p.stock,
+            price: `R$ ${Number(p.price).toFixed(2).replace('.', ',')}`,
+            priceNumeric: Number(p.price),
+            promoPrice: p.promo_price ? `R$ ${Number(p.promo_price).toFixed(2).replace('.', ',')}` : '',
+            promoPriceNumeric: p.promo_price ? Number(p.promo_price) : undefined,
+            isHidden: p.visibility === 'oculto',
+            createdAt: new Date(p.created_at).getTime(),
+          }))
+          setProducts(mapped)
+        }
+      } catch (err) {
+        console.error('Falha ao buscar produtos no dashboard:', err)
+      }
+    }
+
+    loadProducts()
+
+    return () => {
+      isMounted = false
+    }
+  }, [])
+
   const handleLogout = async () => {
     try {
       await supabase.auth.signOut()
@@ -160,14 +204,20 @@ export function DashboardPage({
   }
 
   // Ações de Produtos
-  const handleDeleteProduct = (productId: string) => {
+  const handleDeleteProduct = async (productId: string) => {
     const prod = products.find((p) => p.id === productId)
     setProducts((prev) => prev.filter((p) => p.id !== productId))
-    showToast(`Produto ${prod?.name || ''} excluído com sucesso.`)
     setOpenProductMenuId(null)
+    showToast(`Produto ${prod?.name || ''} excluído com sucesso.`)
+
+    try {
+      await supabase.from('products').delete().eq('id', productId)
+    } catch (err) {
+      console.error('Erro ao excluir no Supabase:', err)
+    }
   }
 
-  const handleToggleHideProduct = (productId: string) => {
+  const handleToggleHideProduct = async (productId: string) => {
     let nowHidden = false
     setProducts((prev) =>
       prev.map((p) => {
@@ -178,13 +228,22 @@ export function DashboardPage({
         return p
       })
     )
+    setOpenProductMenuId(null)
     const prod = products.find((p) => p.id === productId)
     showToast(
       nowHidden
         ? `Produto ${prod?.sku || ''} ocultado da loja.`
         : `Produto ${prod?.sku || ''} agora está visível na loja.`
     )
-    setOpenProductMenuId(null)
+
+    try {
+      await supabase
+        .from('products')
+        .update({ visibility: nowHidden ? 'oculto' : 'visivel' })
+        .eq('id', productId)
+    } catch (err) {
+      console.error('Erro ao alternar visibilidade no Supabase:', err)
+    }
   }
 
   const handleDuplicateProduct = (productId: string) => {
