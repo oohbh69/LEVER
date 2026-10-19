@@ -25,6 +25,9 @@ type PageRoute =
   | 'trocas-e-devolucoes'
   | 'painel'
   | 'dashboard'
+  | 'criar-produto'
+  | 'frete'
+  | 'cupom'
 
 interface Product {
   id: number
@@ -115,6 +118,12 @@ function AppContent() {
         return 'painel'
       case 'dashboard':
         return 'dashboard'
+      case 'criar-produto':
+        return 'criar-produto'
+      case 'frete':
+        return 'frete'
+      case 'cupom':
+        return 'cupom'
       case 'carrinho':
         openCart()
         return 'home'
@@ -176,6 +185,9 @@ function AppContent() {
       'trocas-e-devolucoes': 'LEVER | Trocas e Devoluções',
       painel: 'LEVER | Login',
       dashboard: 'LEVER | Dashboard',
+      'criar-produto': 'LEVER | Criar Produto',
+      frete: 'LEVER | Frete Personalizado',
+      cupom: 'LEVER | Cupons de Desconto',
     }
     document.title = routeTitles[currentPage] || 'LEVER'
   }, [currentPage, selectedProductName])
@@ -189,6 +201,15 @@ function AppContent() {
       window.location.hash = ''
     } else if (page === 'dashboard') {
       window.history.pushState({}, '', '/dashboard')
+      window.location.hash = ''
+    } else if (page === 'criar-produto') {
+      window.history.pushState({}, '', '/criar-produto')
+      window.location.hash = ''
+    } else if (page === 'frete') {
+      window.history.pushState({}, '', '/frete')
+      window.location.hash = ''
+    } else if (page === 'cupom') {
+      window.history.pushState({}, '', '/cupom')
       window.location.hash = ''
     } else {
       window.location.hash = page
@@ -245,6 +266,18 @@ function AppContent() {
 
   if (currentPage === 'dashboard') {
     return <DashboardPage />
+  }
+
+  if (currentPage === 'criar-produto') {
+    return <DashboardPage initialTab="criar-produto" />
+  }
+
+  if (currentPage === 'frete') {
+    return <DashboardPage initialTab="frete" />
+  }
+
+  if (currentPage === 'cupom') {
+    return <DashboardPage initialTab="cupom" />
   }
 
   return (

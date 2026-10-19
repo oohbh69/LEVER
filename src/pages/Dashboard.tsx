@@ -1,6 +1,9 @@
 import { useState, useEffect } from 'react'
+import { CriarProdutoPage, type NewProductData } from './CriarProduto'
+import { CriarFretePage } from './CriarFrete'
+import { CriarCupomPage } from './CriarCupom'
 
-type TabType = 'dashboard' | 'pedidos' | 'produtos'
+type TabType = 'dashboard' | 'pedidos' | 'produtos' | 'criar-produto' | 'frete' | 'cupom'
 
 interface OrderItem {
   id: string
@@ -28,198 +31,48 @@ interface ProductItem {
   createdAt: number
 }
 
-const initialOrders: OrderItem[] = [
-  {
-    id: '1',
-    number: '#1048',
-    date: '15/10/2026 16:42',
-    clientName: 'Lucas Mendes',
-    clientEmail: 'lucas.mendes@email.com',
-    total: 'R$ 199,90',
-    products: '1x Óculos LEVER Blackout Acetato UV400',
-    paymentStatus: 'aguardando',
-    shippingStatus: 'pendente',
-  },
-  {
-    id: '2',
-    number: '#1047',
-    date: '15/10/2026 15:18',
-    clientName: 'Mariana Silveira',
-    clientEmail: 'mariana.s@email.com',
-    total: 'R$ 399,80',
-    products: '2x Óculos LEVER Tortoise Acetato UV400',
-    paymentStatus: 'pago',
-    shippingStatus: 'embalado',
-  },
-  {
-    id: '3',
-    number: '#1046',
-    date: '15/10/2026 14:05',
-    clientName: 'Gabriel Rocha',
-    clientEmail: 'gabriel.r@email.com',
-    total: 'R$ 199,90',
-    products: '1x Óculos LEVER Minimalist Prata',
-    paymentStatus: 'pago',
-    shippingStatus: 'enviado',
-  },
-  {
-    id: '4',
-    number: '#1045',
-    date: '15/10/2026 11:30',
-    clientName: 'Beatriz Lima',
-    clientEmail: 'beatriz.l@email.com',
-    total: 'R$ 199,90',
-    products: '1x Óculos LEVER Blackout Acetato UV400',
-    paymentStatus: 'pago',
-    shippingStatus: 'pendente',
-  },
-  {
-    id: '5',
-    number: '#1044',
-    date: '14/10/2026 19:22',
-    clientName: 'Carlos Eduardo',
-    clientEmail: 'cadu@email.com',
-    total: 'R$ 199,90',
-    products: '1x Óculos LEVER Amber Classic',
-    paymentStatus: 'cancelado',
-    shippingStatus: 'cancelado',
-  },
-  {
-    id: '6',
-    number: '#1043',
-    date: '14/10/2026 16:10',
-    clientName: 'Fernanda Souza',
-    clientEmail: 'fernanda.s@email.com',
-    total: 'R$ 199,90',
-    products: '1x Óculos LEVER Blackout Acetato UV400',
-    paymentStatus: 'pago',
-    shippingStatus: 'enviado',
-  },
-]
+const initialOrders: OrderItem[] = []
 
-const initialProducts: ProductItem[] = [
-  {
-    id: '1',
-    sku: 'LEV-BLK-001',
-    name: 'Óculos de Sol LEVER Blackout Acetato UV400',
-    category: 'Eyewear',
-    stock: 42,
-    price: 'R$ 259,90',
-    priceNumeric: 259.9,
-    promoPrice: 'R$ 199,90',
-    promoPriceNumeric: 199.9,
-    isHidden: false,
-    createdAt: 1729000000000,
-  },
-  {
-    id: '2',
-    sku: 'LEV-TOR-002',
-    name: 'Óculos LEVER Tortoise Acetato UV400',
-    category: 'Eyewear',
-    stock: 18,
-    price: 'R$ 279,90',
-    priceNumeric: 279.9,
-    promoPrice: 'R$ 219,90',
-    promoPriceNumeric: 219.9,
-    isHidden: false,
-    createdAt: 1728900000000,
-  },
-  {
-    id: '3',
-    sku: 'LEV-MIN-003',
-    name: 'Óculos LEVER Minimalist Prata',
-    category: 'Eyewear',
-    stock: 7,
-    price: 'R$ 229,90',
-    priceNumeric: 229.9,
-    promoPrice: 'R$ 189,90',
-    promoPriceNumeric: 189.9,
-    isHidden: false,
-    createdAt: 1728800000000,
-  },
-  {
-    id: '4',
-    sku: 'LEV-AMB-004',
-    name: 'Óculos LEVER Amber Classic Acetato',
-    category: 'Eyewear',
-    stock: 0,
-    price: 'R$ 249,90',
-    priceNumeric: 249.9,
-    promoPrice: 'R$ 199,90',
-    promoPriceNumeric: 199.9,
-    isHidden: true,
-    createdAt: 1728700000000,
-  },
-  {
-    id: '5',
-    sku: 'LEV-CAM-005',
-    name: 'Camiseta Oversized Minimalist Algodão Egípcio',
-    category: 'Roupas',
-    stock: 35,
-    price: 'R$ 189,90',
-    priceNumeric: 189.9,
-    promoPrice: 'R$ 149,90',
-    promoPriceNumeric: 149.9,
-    isHidden: false,
-    createdAt: 1728600000000,
-  },
-  {
-    id: '6',
-    sku: 'LEV-MOL-006',
-    name: 'Moletom Boxy Heavyweight 450g',
-    category: 'Roupas',
-    stock: 12,
-    price: 'R$ 349,90',
-    priceNumeric: 349.9,
-    promoPrice: 'R$ 299,90',
-    promoPriceNumeric: 299.9,
-    isHidden: false,
-    createdAt: 1728500000000,
-  },
-  {
-    id: '7',
-    sku: 'LEV-CAR-007',
-    name: 'Calça Cargo Utility Pants Ripstop',
-    category: 'Roupas',
-    stock: 24,
-    price: 'R$ 299,90',
-    priceNumeric: 299.9,
-    promoPrice: 'R$ 259,90',
-    promoPriceNumeric: 259.9,
-    isHidden: false,
-    createdAt: 1728400000000,
-  },
-  {
-    id: '8',
-    sku: 'LEV-ACC-008',
-    name: 'Boné Dad Hat Classic LEVER Bordado',
-    category: 'Acessórios',
-    stock: 50,
-    price: 'R$ 139,90',
-    priceNumeric: 139.9,
-    promoPrice: 'R$ 119,90',
-    promoPriceNumeric: 119.9,
-    isHidden: false,
-    createdAt: 1728300000000,
-  },
-  {
-    id: '9',
-    sku: 'LEV-ACC-009',
-    name: 'Estojo Rígido LEVER Couro Premium',
-    category: 'Acessórios',
-    stock: 28,
-    price: 'R$ 99,90',
-    priceNumeric: 99.9,
-    promoPrice: '',
-    isHidden: false,
-    createdAt: 1728200000000,
-  },
-]
+const initialProducts: ProductItem[] = []
 
-export function DashboardPage() {
-  const [activeTab, setActiveTab] = useState<TabType>('dashboard')
+interface DashboardPageProps {
+  initialTab?: TabType
+}
+
+export function DashboardPage({ initialTab = 'dashboard' }: DashboardPageProps = {}) {
+  const [activeTab, setActiveTab] = useState<TabType>(initialTab)
   const [orders, setOrders] = useState<OrderItem[]>(initialOrders)
   const [products, setProducts] = useState<ProductItem[]>(initialProducts)
+
+  // Métricas dinâmicas calculadas a partir dos pedidos e produtos
+  const pendingOrdersCount = orders.filter((o) => o.paymentStatus === 'aguardando').length
+  const paidOrders = orders.filter((o) => o.paymentStatus === 'pago')
+  const paidOrdersCount = paidOrders.length
+  const totalRevenue = paidOrders.reduce((acc, order) => {
+    const rawNum = parseFloat(order.total.replace(/[^\d,]/g, '').replace(',', '.')) || 0
+    return acc + rawNum
+  }, 0)
+  const formattedRevenue = `R$ ${totalRevenue.toLocaleString('pt-BR', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`
+  const ticketMedio =
+    paidOrdersCount > 0
+      ? `R$ ${(totalRevenue / paidOrdersCount).toLocaleString('pt-BR', {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        })}`
+      : 'R$ 0,00'
+  const conversionRate =
+    orders.length > 0
+      ? `${((paidOrdersCount / orders.length) * 100).toFixed(1)}%`
+      : '0.0%'
+
+  useEffect(() => {
+    if (initialTab) {
+      setActiveTab(initialTab)
+    }
+  }, [initialTab])
 
   // Estados de Filtros e Busca de Produtos
   const [productSearch, setProductSearch] = useState('')
@@ -454,7 +307,9 @@ export function DashboardPage() {
 
           <button
             type="button"
-            className={`dashboard-nav-item ${activeTab === 'produtos' ? 'active' : ''}`}
+            className={`dashboard-nav-item ${
+              activeTab === 'produtos' || activeTab === 'criar-produto' ? 'active' : ''
+            }`}
             onClick={() => setActiveTab('produtos')}
           >
             <svg
@@ -470,6 +325,48 @@ export function DashboardPage() {
               <line x1="7" y1="7" x2="7.01" y2="7" />
             </svg>
             Produtos
+          </button>
+
+          <button
+            type="button"
+            className={`dashboard-nav-item ${activeTab === 'frete' ? 'active' : ''}`}
+            onClick={() => setActiveTab('frete')}
+          >
+            <svg
+              className="dashboard-nav-icon"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <rect x="1" y="3" width="15" height="13" />
+              <polygon points="16 8 20 8 23 11 23 16 16 16 8" />
+              <circle cx="5.5" cy="18.5" r="2.5" />
+              <circle cx="18.5" cy="18.5" r="2.5" />
+            </svg>
+            Frete
+          </button>
+
+          <button
+            type="button"
+            className={`dashboard-nav-item ${activeTab === 'cupom' ? 'active' : ''}`}
+            onClick={() => setActiveTab('cupom')}
+          >
+            <svg
+              className="dashboard-nav-icon"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M2 9a3 3 0 0 1 0 6v2a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-2a3 3 0 0 1 0-6V7a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2z" />
+              <line x1="13" y1="5" x2="13" y2="19" strokeDasharray="2 2" />
+            </svg>
+            Cupom
           </button>
         </nav>
       </aside>
@@ -503,7 +400,7 @@ export function DashboardPage() {
                     </svg>
                   </div>
                   <div className="dashboard-card-body">
-                    <span className="dashboard-card-value">4</span>
+                    <span className="dashboard-card-value">{pendingOrdersCount}</span>
                     <span className="dashboard-card-footer pending">
                       Aguardando confirmação Pix / Boleto
                     </span>
@@ -528,7 +425,7 @@ export function DashboardPage() {
                     </svg>
                   </div>
                   <div className="dashboard-card-body">
-                    <span className="dashboard-card-value">28</span>
+                    <span className="dashboard-card-value">{paidOrdersCount}</span>
                     <span className="dashboard-card-footer positive">
                       Aprovados hoje
                     </span>
@@ -553,9 +450,9 @@ export function DashboardPage() {
                     </svg>
                   </div>
                   <div className="dashboard-card-body">
-                    <span className="dashboard-card-value">R$ 5.597,20</span>
+                    <span className="dashboard-card-value">{formattedRevenue}</span>
                     <span className="dashboard-card-footer positive">
-                      ↑ +18.4% vs dia anterior
+                      Total liquidado
                     </span>
                   </div>
                 </div>
@@ -579,7 +476,7 @@ export function DashboardPage() {
                     </svg>
                   </div>
                   <div className="dashboard-card-body">
-                    <span className="dashboard-card-value">R$ 199,90</span>
+                    <span className="dashboard-card-value">{ticketMedio}</span>
                     <span className="dashboard-card-footer">
                       Média por pedido aprovado
                     </span>
@@ -605,7 +502,7 @@ export function DashboardPage() {
                     </svg>
                   </div>
                   <div className="dashboard-card-body">
-                    <span className="dashboard-card-value">16</span>
+                    <span className="dashboard-card-value">0</span>
                     <span className="dashboard-card-footer">
                       Iniciados nas últimas 24h
                     </span>
@@ -631,7 +528,7 @@ export function DashboardPage() {
                     </svg>
                   </div>
                   <div className="dashboard-card-body">
-                    <span className="dashboard-card-value">3.8%</span>
+                    <span className="dashboard-card-value">{conversionRate}</span>
                     <span className="dashboard-card-footer positive">
                       Visitas para checkout concluído
                     </span>
@@ -665,7 +562,22 @@ export function DashboardPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {orders.map((order, index) => {
+                    {orders.length === 0 ? (
+                      <tr>
+                        <td
+                          colSpan={8}
+                          style={{
+                            textAlign: 'center',
+                            padding: '3.5rem 1rem',
+                            color: '#6b7280',
+                            fontWeight: 400,
+                          }}
+                        >
+                          Nenhum pedido registrado no momento.
+                        </td>
+                      </tr>
+                    ) : (
+                      orders.map((order, index) => {
                       const isMenuOpen = openMenuOrderId === order.id
                       const isNearBottom = index >= orders.length - 2
 
@@ -810,7 +722,8 @@ export function DashboardPage() {
                           </td>
                         </tr>
                       )
-                    })}
+                    })
+                  )}
                   </tbody>
                 </table>
               </div>
@@ -968,6 +881,7 @@ export function DashboardPage() {
                   <button
                     type="button"
                     className="dashboard-add-product-btn"
+                    onClick={() => setActiveTab('criar-produto')}
                   >
                     <svg
                       width="14"
@@ -1174,6 +1088,41 @@ export function DashboardPage() {
               </div>
             </div>
           </>
+        )}
+
+        {/* TAB 4: CRIAR PRODUTO */}
+        {activeTab === 'criar-produto' && (
+          <CriarProdutoPage
+            onBack={() => setActiveTab('produtos')}
+            onSave={(newProdData: NewProductData) => {
+              const newProductItem: ProductItem = {
+                id: newProdData.id,
+                sku: newProdData.sku,
+                name: newProdData.name,
+                category: newProdData.category,
+                stock: newProdData.stock,
+                price: newProdData.price,
+                priceNumeric: newProdData.priceNumeric,
+                promoPrice: newProdData.promoPrice,
+                promoPriceNumeric: newProdData.promoPriceNumeric,
+                isHidden: newProdData.visibility === 'oculto',
+                createdAt: newProdData.createdAt,
+              }
+              setProducts((prev) => [newProductItem, ...prev])
+              showToast(`Produto "${newProdData.name}" criado com sucesso!`)
+              setActiveTab('produtos')
+            }}
+          />
+        )}
+
+        {/* TAB 5: FRETE */}
+        {activeTab === 'frete' && (
+          <CriarFretePage onBack={() => setActiveTab('dashboard')} />
+        )}
+
+        {/* TAB 6: CUPOM */}
+        {activeTab === 'cupom' && (
+          <CriarCupomPage onBack={() => setActiveTab('dashboard')} />
         )}
       </main>
 
