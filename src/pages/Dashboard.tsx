@@ -51,6 +51,7 @@ export function DashboardPage({
   const [activeTab, setActiveTab] = useState<TabType>(initialTab)
   const [orders, setOrders] = useState<OrderItem[]>(initialOrders)
   const [products, setProducts] = useState<ProductItem[]>(initialProducts)
+  const [editingProductId, setEditingProductId] = useState<string | null>(null)
 
   // Métricas dinâmicas calculadas a partir dos pedidos e produtos
   const pendingOrdersCount = orders.filter((o) => o.paymentStatus === 'aguardando').length
@@ -205,6 +206,12 @@ export function DashboardPage({
   }
 
   // Ações de Produtos
+  const handleEditProduct = (productId: string) => {
+    setEditingProductId(productId)
+    setActiveTab('criar-produto')
+    setOpenProductMenuId(null)
+  }
+
   const handleDeleteProduct = async (productId: string) => {
     const prod = products.find((p) => p.id === productId)
     setProducts((prev) => prev.filter((p) => p.id !== productId))
@@ -385,7 +392,10 @@ export function DashboardPage({
             className={`dashboard-nav-item ${
               activeTab === 'produtos' || activeTab === 'criar-produto' ? 'active' : ''
             }`}
-            onClick={() => setActiveTab('produtos')}
+            onClick={() => {
+              setEditingProductId(null)
+              setActiveTab('produtos')
+            }}
           >
             <svg
               className="dashboard-nav-icon"
@@ -1024,7 +1034,10 @@ export function DashboardPage({
                   <button
                     type="button"
                     className="dashboard-add-product-btn"
-                    onClick={() => setActiveTab('criar-produto')}
+                    onClick={() => {
+                      setEditingProductId(null)
+                      setActiveTab('criar-produto')
+                    }}
                   >
                     <svg
                       width="14"
@@ -1070,7 +1083,12 @@ export function DashboardPage({
                         const isNearBottom = index >= filteredProducts.length - 2
 
                         return (
-                          <tr key={product.id}>
+                          <tr
+                            key={product.id}
+                            onClick={() => handleEditProduct(product.id)}
+                            style={{ cursor: 'pointer' }}
+                            title="Clique para editar este produto"
+                          >
                             <td>
                               <span style={{ color: '#4b5563', fontSize: '0.8rem', letterSpacing: '0.04em' }}>
                                 {product.sku}
@@ -1148,7 +1166,30 @@ export function DashboardPage({
                                     <button
                                       type="button"
                                       className="order-action-item"
+                                      onClick={() => handleEditProduct(product.id)}
+                                      style={{ fontWeight: 400 }}
+                                    >
+                                      <svg
+                                        width="14"
+                                        height="14"
+                                        viewBox="0 0 24 24"
+                                        fill="none"
+                                        stroke="currentColor"
+                                        strokeWidth="2"
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                      >
+                                        <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+                                        <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+                                      </svg>
+                                      editar produto
+                                    </button>
+
+                                    <button
+                                      type="button"
+                                      className="order-action-item"
                                       onClick={() => handleToggleHideProduct(product.id)}
+                                      style={{ fontWeight: 400 }}
                                     >
                                       <svg
                                         width="14"
@@ -1179,6 +1220,7 @@ export function DashboardPage({
                                       type="button"
                                       className="order-action-item"
                                       onClick={() => handleDuplicateProduct(product.id)}
+                                      style={{ fontWeight: 400 }}
                                     >
                                       <svg
                                         width="14"
@@ -1200,6 +1242,7 @@ export function DashboardPage({
                                       type="button"
                                       className="order-action-item danger"
                                       onClick={() => handleDeleteProduct(product.id)}
+                                      style={{ fontWeight: 400 }}
                                     >
                                       <svg
                                         width="14"
@@ -1233,10 +1276,14 @@ export function DashboardPage({
           </>
         )}
 
-        {/* TAB 4: CRIAR PRODUTO */}
+        {/* TAB 4: CRIAR OU EDITAR PRODUTO */}
         {activeTab === 'criar-produto' && (
           <CriarProdutoPage
-            onBack={() => setActiveTab('produtos')}
+            editProductId={editingProductId}
+            onBack={() => {
+              setEditingProductId(null)
+              setActiveTab('produtos')
+            }}
             onSave={(newProdData: NewProductData) => {
               const newProductItem: ProductItem = {
                 id: newProdData.id,
@@ -1251,8 +1298,19 @@ export function DashboardPage({
                 isHidden: newProdData.visibility === 'oculto',
                 createdAt: newProdData.createdAt,
               }
-              setProducts((prev) => [newProductItem, ...prev])
-              showToast(`Produto "${newProdData.name}" criado com sucesso!`)
+              setProducts((prev) => {
+                const exists = prev.some((p) => p.id === newProductItem.id)
+                if (exists) {
+                  return prev.map((p) => (p.id === newProductItem.id ? newProductItem : p))
+                }
+                return [newProductItem, ...prev]
+              })
+              showToast(
+                editingProductId
+                  ? `Produto "${newProdData.name}" atualizado com sucesso!`
+                  : `Produto "${newProdData.name}" criado com sucesso!`
+              )
+              setEditingProductId(null)
               setActiveTab('produtos')
             }}
           />

@@ -36,9 +36,13 @@ export interface NewProductData {
 interface CriarProdutoProps {
   onBack: () => void
   onSave: (product: NewProductData) => void
+  editProductId?: string | null
 }
 
-export function CriarProdutoPage({ onBack, onSave }: CriarProdutoProps) {
+export function CriarProdutoPage({ onBack, onSave, editProductId }: CriarProdutoProps) {
+  // Estado de carregamento dos dados ao editar
+  const [isLoadingProduct, setIsLoadingProduct] = useState(false)
+
   // Nome, Descrição e SKU
   const [name, setName] = useState('')
   const [sku, setSku] = useState('')
@@ -107,7 +111,9 @@ export function CriarProdutoPage({ onBack, onSave }: CriarProdutoProps) {
         if (data && data.length > 0 && isMounted) {
           const names = data.map((c: any) => c.name)
           setCategoriesList(names)
-          setCategory((current) => (names.includes(current) ? current : names[0]))
+          if (!editProductId) {
+            setCategory((current) => (names.includes(current) ? current : names[0]))
+          }
         }
       } catch (err) {
         console.error('Falha ao carregar categorias do Supabase:', err)
@@ -119,7 +125,152 @@ export function CriarProdutoPage({ onBack, onSave }: CriarProdutoProps) {
     return () => {
       isMounted = false
     }
-  }, [])
+  }, [editProductId])
+
+  // Carregar dados completos do produto caso esteja no modo edição
+  useEffect(() => {
+    if (!editProductId) return
+    let isMounted = true
+    setIsLoadingProduct(true)
+
+    async function loadProductData() {
+      try {
+        const { data, error } = await supabase
+          .from('products')
+          .select(`
+            *,
+            categories(id, name),
+            product_images(image_url, sort_order, is_cover),
+            product_tags(tag_name)
+          `)
+          .eq('id', editProductId)
+          .single()
+
+        if (error) {
+          console.error('Erro ao buscar dados do produto para edição:', error)
+          return
+        }
+
+        if (data && isMounted) {
+          setName(data.name || '')
+          setSku(data.sku || '')
+          setDescription(data.description || '')
+
+          const loadedCatName = Array.isArray(data.categories)
+            ? data.categories[0]?.name
+            : data.categories?.name
+          if (loadedCatName) {
+            setCategory(loadedCatName)
+            setCategoriesList((prev) =>
+              prev.includes(loadedCatName) ? prev : [...prev, loadedCatName]
+            )
+          }
+
+          if (data.price !== null && data.price !== undefined) {
+            setPrice(
+              Number(data.price).toLocaleString('pt-BR', {
+                style: 'currency',
+                currency: 'BRL',
+              })
+            )
+          }
+
+          if (
+            data.promo_price !== null &&
+            data.promo_price !== undefined &&
+            Number(data.promo_price) > 0
+          ) {
+            setPromoPrice(
+              Number(data.promo_price).toLocaleString('pt-BR', {
+                style: 'currency',
+                currency: 'BRL',
+              })
+            )
+          } else {
+            setPromoPrice('')
+          }
+
+          if (
+            data.cost_price !== null &&
+            data.cost_price !== undefined &&
+            Number(data.cost_price) > 0
+          ) {
+            setCostPrice(
+              Number(data.cost_price).toLocaleString('pt-BR', {
+                style: 'currency',
+                currency: 'BRL',
+              })
+            )
+          } else {
+            setCostPrice('')
+          }
+
+          setStock(
+            data.stock !== null && data.stock !== undefined ? String(data.stock) : '0'
+          )
+          setStockLocation(data.stock_location || '')
+          setLowStockAlert(
+            data.low_stock_alert !== null && data.low_stock_alert !== undefined
+              ? String(data.low_stock_alert)
+              : '5'
+          )
+          setTrackStock(data.track_stock ?? true)
+          setContinueSellingOutOfStock(data.continue_selling_out_of_stock ?? false)
+
+          setWeight(
+            data.weight !== null && data.weight !== undefined ? String(data.weight) : ''
+          )
+          setLength(
+            data.length !== null && data.length !== undefined ? String(data.length) : ''
+          )
+          setWidth(
+            data.width !== null && data.width !== undefined ? String(data.width) : ''
+          )
+          setHeight(
+            data.height !== null && data.height !== undefined ? String(data.height) : ''
+          )
+
+          if (data.visibility) {
+            setVisibility(data.visibility)
+          }
+          setFreeShipping(!!data.free_shipping)
+          if (data.free_shipping_scope) {
+            setFreeShippingScope(data.free_shipping_scope)
+          }
+          setShowFreeShippingBadge(data.show_free_shipping_badge ?? true)
+
+          // Fotos ordenadas
+          if (Array.isArray(data.product_images) && data.product_images.length > 0) {
+            const sortedImgs = [...data.product_images].sort(
+              (a: any, b: any) => (a.sort_order ?? 0) - (b.sort_order ?? 0)
+            )
+            setImages(sortedImgs.map((img: any) => img.image_url))
+          } else {
+            setImages([])
+          }
+
+          // Tags
+          if (Array.isArray(data.product_tags) && data.product_tags.length > 0) {
+            setTags(data.product_tags.map((t: any) => t.tag_name))
+          } else {
+            setTags([])
+          }
+        }
+      } catch (err) {
+        console.error('Falha geral ao carregar dados do produto:', err)
+      } finally {
+        if (isMounted) {
+          setIsLoadingProduct(false)
+        }
+      }
+    }
+
+    loadProductData()
+
+    return () => {
+      isMounted = false
+    }
+  }, [editProductId])
 
   // Criar nova categoria
   const handleCreateCategory = async () => {
@@ -461,44 +612,45 @@ export function CriarProdutoPage({ onBack, onSave }: CriarProdutoProps) {
         ? parseFloat(costPrice.replace(/[^\d,]/g, '').replace(',', '.'))
         : null
 
-      const { data: insertedProduct, error: prodErr } = await supabase
-        .from('products')
-        .insert({
-          name: name.trim(),
-          sku: finalSku,
-          description: description.trim() || null,
-          category_id: categoryId,
-          price: priceNum,
-          promo_price: promoNum > 0 ? promoNum : null,
-          cost_price: costPriceClean && costPriceClean > 0 ? costPriceClean : null,
-          stock: parseInt(stock, 10) || 0,
-          stock_location: stockLocation.trim() || null,
-          low_stock_alert: parseInt(lowStockAlert, 10) || 5,
-          track_stock: trackStock,
-          continue_selling_out_of_stock: continueSellingOutOfStock,
-          weight: parseFloat(weight.replace(',', '.')) || 0.25,
-          length: parseFloat(length.replace(',', '.')) || 18,
-          width: parseFloat(width.replace(',', '.')) || 12,
-          height: parseFloat(height.replace(',', '.')) || 6,
-          visibility,
-          free_shipping: freeShipping,
-          free_shipping_scope: freeShippingScope,
-          show_free_shipping_badge: showFreeShippingBadge,
-        })
-        .select()
-        .single()
-
-      if (prodErr) {
-        console.error('Erro ao inserir produto no Supabase:', prodErr)
+      const productPayload = {
+        name: name.trim(),
+        sku: finalSku,
+        description: description.trim() || null,
+        category_id: categoryId,
+        price: priceNum,
+        promo_price: promoNum > 0 ? promoNum : null,
+        cost_price: costPriceClean && costPriceClean > 0 ? costPriceClean : null,
+        stock: parseInt(stock, 10) || 0,
+        stock_location: stockLocation.trim() || null,
+        low_stock_alert: parseInt(lowStockAlert, 10) || 5,
+        track_stock: trackStock,
+        continue_selling_out_of_stock: continueSellingOutOfStock,
+        weight: parseFloat(weight.replace(',', '.')) || 0.25,
+        length: parseFloat(length.replace(',', '.')) || 18,
+        width: parseFloat(width.replace(',', '.')) || 12,
+        height: parseFloat(height.replace(',', '.')) || 6,
+        visibility,
+        free_shipping: freeShipping,
+        free_shipping_scope: freeShippingScope,
+        show_free_shipping_badge: showFreeShippingBadge,
       }
 
-      if (insertedProduct) {
-        newProduct.id = insertedProduct.id
+      if (editProductId) {
+        // Atualizar produto existente no Supabase
+        const { error: updateErr } = await supabase
+          .from('products')
+          .update(productPayload)
+          .eq('id', editProductId)
 
-        // Inserir imagens associadas
+        if (updateErr) {
+          console.error('Erro ao atualizar produto no Supabase:', updateErr)
+        }
+
+        // Sincronizar imagens: deletar antigas e inserir novas atualizadas
+        await supabase.from('product_images').delete().eq('product_id', editProductId)
         if (images.length > 0) {
           const imagesPayload = images.map((url, idx) => ({
-            product_id: insertedProduct.id,
+            product_id: editProductId,
             image_url: url,
             cf_key: url.split('/').pop() || `img-${idx}`,
             is_cover: idx === 0,
@@ -507,13 +659,52 @@ export function CriarProdutoPage({ onBack, onSave }: CriarProdutoProps) {
           await supabase.from('product_images').insert(imagesPayload)
         }
 
-        // Inserir tags associadas
+        // Sincronizar tags: deletar antigas e inserir novas
+        await supabase.from('product_tags').delete().eq('product_id', editProductId)
         if (tags.length > 0) {
           const tagsPayload = tags.map((t) => ({
-            product_id: insertedProduct.id,
+            product_id: editProductId,
             tag_name: t,
           }))
           await supabase.from('product_tags').insert(tagsPayload)
+        }
+
+        newProduct.id = editProductId
+      } else {
+        // Inserir novo produto no Supabase
+        const { data: insertedProduct, error: prodErr } = await supabase
+          .from('products')
+          .insert(productPayload)
+          .select()
+          .single()
+
+        if (prodErr) {
+          console.error('Erro ao inserir produto no Supabase:', prodErr)
+        }
+
+        if (insertedProduct) {
+          newProduct.id = insertedProduct.id
+
+          // Inserir imagens associadas
+          if (images.length > 0) {
+            const imagesPayload = images.map((url, idx) => ({
+              product_id: insertedProduct.id,
+              image_url: url,
+              cf_key: url.split('/').pop() || `img-${idx}`,
+              is_cover: idx === 0,
+              sort_order: idx,
+            }))
+            await supabase.from('product_images').insert(imagesPayload)
+          }
+
+          // Inserir tags associadas
+          if (tags.length > 0) {
+            const tagsPayload = tags.map((t) => ({
+              product_id: insertedProduct.id,
+              tag_name: t,
+            }))
+            await supabase.from('product_tags').insert(tagsPayload)
+          }
         }
       }
 
@@ -526,6 +717,47 @@ export function CriarProdutoPage({ onBack, onSave }: CriarProdutoProps) {
     }
   }
 
+  if (isLoadingProduct) {
+    return (
+      <div
+        className="product-create-page"
+        style={{
+          minHeight: '60vh',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: '1rem',
+          color: '#6b7280',
+        }}
+      >
+        <svg
+          className="spin-icon"
+          width="24"
+          height="24"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <line x1="12" y1="2" x2="12" y2="6" />
+          <line x1="12" y1="18" x2="12" y2="22" />
+          <line x1="4.93" y1="4.93" x2="7.76" y2="7.76" />
+          <line x1="16.24" y1="16.24" x2="19.07" y2="19.07" />
+          <line x1="2" y1="12" x2="6" y2="12" />
+          <line x1="18" y1="12" x2="22" y2="12" />
+          <line x1="4.93" y1="19.07" x2="7.76" y2="16.24" />
+          <line x1="16.24" y1="7.76" x2="19.07" y2="4.93" />
+        </svg>
+        <span style={{ fontSize: '0.88rem', fontWeight: 400 }}>
+          Carregando dados do produto...
+        </span>
+      </div>
+    )
+  }
+
   return (
     <div className="product-create-page">
       {/* Barra de Ações Superior */}
@@ -536,6 +768,7 @@ export function CriarProdutoPage({ onBack, onSave }: CriarProdutoProps) {
             className="product-create-back-btn"
             onClick={onBack}
             title="Voltar para a lista de produtos"
+            style={{ fontWeight: 400 }}
           >
             <svg
               width="16"
@@ -556,7 +789,9 @@ export function CriarProdutoPage({ onBack, onSave }: CriarProdutoProps) {
           <div className="product-create-breadcrumbs">
             <span className="crumb-segment">Produtos</span>
             <span className="crumb-separator">/</span>
-            <span className="crumb-current">Criar produto</span>
+            <span className="crumb-current">
+              {editProductId ? 'Editar produto' : 'Criar produto'}
+            </span>
           </div>
         </div>
 
@@ -582,8 +817,9 @@ export function CriarProdutoPage({ onBack, onSave }: CriarProdutoProps) {
             type="button"
             className="product-create-discard-btn"
             onClick={onBack}
+            style={{ fontWeight: 400 }}
           >
-            Descartar
+            {editProductId ? 'Cancelar' : 'Descartar'}
           </button>
 
           <button
@@ -591,6 +827,7 @@ export function CriarProdutoPage({ onBack, onSave }: CriarProdutoProps) {
             className="product-create-save-btn"
             onClick={handleSaveProduct}
             disabled={isSaving}
+            style={{ fontWeight: 400 }}
           >
             {isSaving ? (
               <>
@@ -614,7 +851,7 @@ export function CriarProdutoPage({ onBack, onSave }: CriarProdutoProps) {
                   <line x1="4.93" y1="19.07" x2="7.76" y2="16.24" />
                   <line x1="16.24" y1="7.76" x2="19.07" y2="4.93" />
                 </svg>
-                Salvando produto...
+                {editProductId ? 'Atualizando produto...' : 'Salvando produto...'}
               </>
             ) : (
               <>
@@ -630,7 +867,7 @@ export function CriarProdutoPage({ onBack, onSave }: CriarProdutoProps) {
                 >
                   <polyline points="20 6 9 17 4 12" />
                 </svg>
-                Salvar produto
+                {editProductId ? 'Salvar alterações' : 'Salvar produto'}
               </>
             )}
           </button>
@@ -645,7 +882,9 @@ export function CriarProdutoPage({ onBack, onSave }: CriarProdutoProps) {
             {/* 1. Nome, Descrição e SKU */}
             <section className="product-form-card">
               <div className="product-card-header">
-                <h2 className="product-card-title">Informações gerais</h2>
+                <h2 className="product-card-title">
+                  {editProductId ? 'Editar informações' : 'Informações gerais'}
+                </h2>
                 <span className="product-card-desc">
                   Identificação principal do item na loja
                 </span>
