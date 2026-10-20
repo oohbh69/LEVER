@@ -9,6 +9,7 @@ export interface VitrineBanner {
   buttonText?: string
   linkUrl?: string
   imageUrl: string
+  imageUrlMobile?: string
   isActive: boolean
 }
 
@@ -18,6 +19,7 @@ export interface CategoryBannerItem {
   buttonText?: string
   linkUrl?: string
   imageUrl?: string
+  imageUrlMobile?: string
   isActive: boolean
   sortOrder: number
 }
@@ -94,52 +96,54 @@ export function saveVitrineConfig(config: VitrineConfig): void {
 
 export async function fetchVitrineConfigFromSupabase(): Promise<VitrineConfig> {
   try {
-    // 1. Buscar configurações da vitrine
-    const { data: settingsData } = await supabase
-      .from('vitrine_settings')
-      .select('*')
-      .eq('id', 'default')
-      .maybeSingle()
-
-    // 2. Buscar banners do banco
-    const { data: bannersData, error: bannersErr } = await supabase
-      .from('banners')
-      .select('*')
-      .order('sort_order', { ascending: true })
+    // 1. Busca paralela de configurações, banners e categorias
+    const [
+      { data: settingsData },
+      { data: bannersData, error: bannersErr },
+      { data: catBannersData, error: catBannersErr },
+    ] = await Promise.all([
+      supabase.from('vitrine_settings').select('*').eq('id', 'default').maybeSingle(),
+      supabase.from('banners').select('*').order('sort_order', { ascending: true }),
+      supabase.from('category_banners').select('*').order('sort_order', { ascending: true }),
+    ])
 
     if (bannersErr) {
       console.error('Erro ao buscar banners do Supabase:', bannersErr)
     }
 
-    const banners: VitrineBanner[] = (bannersData || []).map((b: any) => ({
-      id: String(b.id),
-      title: b.title || 'Nova Coleção',
-      subtitle: b.subtitle || undefined,
-      buttonText: b.button_text || undefined,
-      linkUrl: b.link_url || undefined,
-      imageUrl: b.image_url,
-      isActive: b.is_active ?? true,
-    }))
-
-    // 3. Buscar banners de categoria do banco
-    const { data: catBannersData, error: catBannersErr } = await supabase
-      .from('category_banners')
-      .select('*')
-      .order('sort_order', { ascending: true })
-
     if (catBannersErr) {
       console.error('Erro ao buscar banners de categoria do Supabase:', catBannersErr)
     }
 
-    const categoryBanners: CategoryBannerItem[] = (catBannersData || []).map((cb: any) => ({
-      id: String(cb.id),
-      title: cb.title || 'Categoria',
-      buttonText: cb.button_text || undefined,
-      linkUrl: cb.link_url || undefined,
-      imageUrl: cb.image_url || undefined,
-      isActive: cb.is_active ?? true,
-      sortOrder: cb.sort_order ?? 0,
-    }))
+    // Se a consulta ao banco teve sucesso, o banco é a fonte da verdade (mesmo que esteja vazio [])
+    const resolvedBanners: VitrineBanner[] =
+      !bannersErr && bannersData !== null
+        ? bannersData.map((b: any) => ({
+            id: String(b.id),
+            title: b.title || 'Nova Coleção',
+            subtitle: b.subtitle || undefined,
+            buttonText: b.button_text || undefined,
+            linkUrl: b.link_url || undefined,
+            imageUrl: b.image_url,
+            imageUrlMobile: b.image_url_mobile || undefined,
+            isActive: b.is_active ?? true,
+          }))
+        : getVitrineConfig().banners
+
+    // Se a consulta de categorias teve sucesso, o banco é a fonte da verdade
+    const resolvedCategoryBanners: CategoryBannerItem[] =
+      !catBannersErr && catBannersData !== null
+        ? catBannersData.map((cb: any) => ({
+            id: String(cb.id),
+            title: cb.title || 'Categoria',
+            buttonText: cb.button_text || undefined,
+            linkUrl: cb.link_url || undefined,
+            imageUrl: cb.image_url || undefined,
+            imageUrlMobile: cb.image_url_mobile || undefined,
+            isActive: cb.is_active ?? true,
+            sortOrder: cb.sort_order ?? 0,
+          }))
+        : getVitrineConfig().categoryBanners || DEFAULT_CONFIG.categoryBanners
 
     const config: VitrineConfig = {
       sectionTitle: settingsData?.section_title ?? DEFAULT_CONFIG.sectionTitle,
@@ -154,13 +158,12 @@ export async function fetchVitrineConfigFromSupabase(): Promise<VitrineConfig> {
         typeof settingsData?.custom_tags === 'object' && settingsData?.custom_tags !== null
           ? settingsData.custom_tags
           : DEFAULT_CONFIG.customTags,
-      banners: banners.length > 0 ? banners : getVitrineConfig().banners,
+      banners: resolvedBanners,
       categoriesSectionTitle:
         settingsData?.categories_section_title ?? DEFAULT_CONFIG.categoriesSectionTitle,
       categoriesIsEnabled:
         settingsData?.categories_is_enabled ?? DEFAULT_CONFIG.categoriesIsEnabled,
-      categoryBanners:
-        categoryBanners.length > 0 ? categoryBanners : getVitrineConfig().categoryBanners || DEFAULT_CONFIG.categoryBanners,
+      categoryBanners: resolvedCategoryBanners,
     }
 
     saveVitrineConfig(config)
@@ -198,15 +201,19 @@ export function CarrosselVitrinePage({ onBack, onNavigateToStore }: CarrosselVit
   const [searchQuery, setSearchQuery] = useState('')
   const [filterMode, setFilterMode] = useState<'todos' | 'selecionados' | 'nao-selecionados'>('todos')
 
-  // Estado para adicionar banner hero
+  // Estado para adicionar / editar banner hero
   const [showAddBannerModal, setShowAddBannerModal] = useState(false)
+  const [editingBannerId, setEditingBannerId] = useState<string | null>(null)
   const [bannerTitle, setBannerTitle] = useState('')
   const [bannerSubtitle, setBannerSubtitle] = useState('')
   const [bannerBtnText, setBannerBtnText] = useState('')
   const [bannerLink, setBannerLink] = useState('')
   const [bannerImageUrl, setBannerImageUrl] = useState('')
+  const [bannerImageUrlMobile, setBannerImageUrlMobile] = useState('')
   const [isUploadingBanner, setIsUploadingBanner] = useState(false)
+  const [isUploadingBannerMobile, setIsUploadingBannerMobile] = useState(false)
   const bannerFileInputRef = useRef<HTMLInputElement>(null)
+  const bannerMobileFileInputRef = useRef<HTMLInputElement>(null)
 
   // Estado para adicionar / editar banner de categoria
   const [showCatBannerModal, setShowCatBannerModal] = useState(false)
@@ -215,8 +222,14 @@ export function CarrosselVitrinePage({ onBack, onNavigateToStore }: CarrosselVit
   const [catBannerBtnText, setCatBannerBtnText] = useState('CONFERIR')
   const [catBannerLink, setCatBannerLink] = useState('')
   const [catBannerImageUrl, setCatBannerImageUrl] = useState('')
+  const [catBannerImageUrlMobile, setCatBannerImageUrlMobile] = useState('')
   const [isUploadingCatBanner, setIsUploadingCatBanner] = useState(false)
+  const [isUploadingCatBannerMobile, setIsUploadingCatBannerMobile] = useState(false)
   const catBannerFileInputRef = useRef<HTMLInputElement>(null)
+  const catBannerMobileFileInputRef = useRef<HTMLInputElement>(null)
+
+  // Dispositivo de simulação para o Live Preview
+  const [previewDevice, setPreviewDevice] = useState<'desktop' | 'mobile'>('desktop')
 
   // Feedback
   const [toastMessage, setToastMessage] = useState<string | null>(null)
@@ -236,18 +249,20 @@ export function CarrosselVitrinePage({ onBack, onNavigateToStore }: CarrosselVit
     async function loadCatalog() {
       try {
         setIsLoadingProducts(true)
-        const { data, error } = await supabase
-          .from('products')
-          .select('id, name, sku, price, promo_price, visibility, product_images(*), categories(name)')
-          .order('created_at', { ascending: false })
+        const [productsRes, remoteConfig] = await Promise.all([
+          supabase
+            .from('products')
+            .select('id, name, sku, price, promo_price, visibility, product_images(image_url, is_cover), categories(name)')
+            .order('created_at', { ascending: false }),
+          fetchVitrineConfigFromSupabase(),
+        ])
 
-        if (error) {
-          console.error('Erro ao carregar catálogo para vitrine:', error)
-          return
-        }
+        if (!isMounted) return
 
-        if (data && isMounted) {
-          const list: ProductItem[] = data.map((item: any) => {
+        if (productsRes.error) {
+          console.error('Erro ao carregar catálogo para vitrine:', productsRes.error)
+        } else if (productsRes.data) {
+          const list: ProductItem[] = productsRes.data.map((item: any) => {
             const rawPrice = Number(item.price) || 0
             const promo = item.promo_price ? Number(item.promo_price) : undefined
             const cover = item.product_images?.find((img: any) => img.is_cover)?.image_url
@@ -268,9 +283,7 @@ export function CarrosselVitrinePage({ onBack, onNavigateToStore }: CarrosselVit
           setProducts(list)
         }
 
-        // Carregar configurações e banners reais do banco de dados
-        const remoteConfig = await fetchVitrineConfigFromSupabase()
-        if (isMounted && remoteConfig) {
+        if (remoteConfig) {
           setConfig(remoteConfig)
         }
       } catch (err) {
@@ -352,7 +365,7 @@ export function CarrosselVitrinePage({ onBack, onNavigateToStore }: CarrosselVit
     showToast('Seleção do carrossel limpa.')
   }
 
-  // Upload de Banner
+  // Upload de Banner Desktop
   const handleBannerUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
@@ -362,17 +375,59 @@ export function CarrosselVitrinePage({ onBack, onNavigateToStore }: CarrosselVit
       const res = await uploadFileToR2(file, 'products')
       if (res && res.url) {
         setBannerImageUrl(res.url)
-        showToast('Imagem do banner enviada com sucesso!')
+        showToast('Imagem desktop do banner enviada com sucesso!')
       }
     } catch (err: any) {
-      showToast(err.message || 'Erro durante upload.')
+      showToast(err.message || 'Erro durante upload desktop.')
     } finally {
       setIsUploadingBanner(false)
       if (bannerFileInputRef.current) bannerFileInputRef.current.value = ''
     }
   }
 
-  // Salvar novo banner
+  // Upload de Banner Mobile
+  const handleBannerMobileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    try {
+      setIsUploadingBannerMobile(true)
+      const res = await uploadFileToR2(file, 'products')
+      if (res && res.url) {
+        setBannerImageUrlMobile(res.url)
+        showToast('Imagem mobile do banner enviada com sucesso!')
+      }
+    } catch (err: any) {
+      showToast(err.message || 'Erro durante upload mobile.')
+    } finally {
+      setIsUploadingBannerMobile(false)
+      if (bannerMobileFileInputRef.current) bannerMobileFileInputRef.current.value = ''
+    }
+  }
+
+  const handleOpenAddBanner = () => {
+    setEditingBannerId(null)
+    setBannerTitle('')
+    setBannerSubtitle('')
+    setBannerBtnText('')
+    setBannerLink('')
+    setBannerImageUrl('')
+    setBannerImageUrlMobile('')
+    setShowAddBannerModal(true)
+  }
+
+  const handleOpenEditBanner = (banner: VitrineBanner) => {
+    setEditingBannerId(banner.id)
+    setBannerTitle(banner.title)
+    setBannerSubtitle(banner.subtitle || '')
+    setBannerBtnText(banner.buttonText || '')
+    setBannerLink(banner.linkUrl || '')
+    setBannerImageUrl(banner.imageUrl)
+    setBannerImageUrlMobile(banner.imageUrlMobile || '')
+    setShowAddBannerModal(true)
+  }
+
+  // Salvar novo banner ou atualizar existente
   const handleSaveBanner = async () => {
     if (!bannerImageUrl.trim()) {
       showToast('Por favor, faça upload ou informe a imagem do banner.')
@@ -387,51 +442,84 @@ export function CarrosselVitrinePage({ onBack, onNavigateToStore }: CarrosselVit
       button_text: bannerBtnText.trim() || null,
       link_url: bannerLink.trim() || null,
       image_url: bannerImageUrl.trim(),
-      is_active: true,
-      sort_order: config.banners.length,
+      image_url_mobile: bannerImageUrlMobile.trim() || null,
+      updated_at: new Date().toISOString(),
     }
 
     try {
-      const { data: inserted, error: insertErr } = await supabase
-        .from('banners')
-        .insert(bannerPayload)
-        .select()
-        .single()
+      if (editingBannerId) {
+        // Atualizar banner existente
+        const { error: updateErr } = await supabase
+          .from('banners')
+          .update(bannerPayload)
+          .eq('id', editingBannerId)
 
-      if (insertErr) {
-        console.error('Erro ao salvar banner no Supabase:', insertErr)
-        showToast('Erro ao gravar banner no banco: ' + insertErr.message)
-      } else if (inserted) {
-        const newBanner: VitrineBanner = {
-          id: String(inserted.id),
-          title: inserted.title,
-          subtitle: inserted.subtitle || undefined,
-          buttonText: inserted.button_text,
-          linkUrl: inserted.link_url || undefined,
-          imageUrl: inserted.image_url,
-          isActive: inserted.is_active,
+        if (updateErr) {
+          console.error('Erro ao atualizar banner no Supabase:', updateErr)
+          showToast('Erro ao atualizar banner: ' + updateErr.message)
+        } else {
+          const updated = config.banners.map((b) =>
+            b.id === editingBannerId
+              ? {
+                  ...b,
+                  title: bannerPayload.title,
+                  subtitle: bannerPayload.subtitle || undefined,
+                  buttonText: bannerPayload.button_text || undefined,
+                  linkUrl: bannerPayload.link_url || undefined,
+                  imageUrl: bannerPayload.image_url,
+                  imageUrlMobile: bannerPayload.image_url_mobile || undefined,
+                }
+              : b
+          )
+          const updatedConfig = { ...config, banners: updated }
+          setConfig(updatedConfig)
+          saveVitrineConfig(updatedConfig)
+          showToast('Banner atualizado com sucesso!')
+          setShowAddBannerModal(false)
         }
+      } else {
+        // Inserir novo banner
+        const { data: inserted, error: insertErr } = await supabase
+          .from('banners')
+          .insert({
+            ...bannerPayload,
+            is_active: true,
+            sort_order: config.banners.length,
+          })
+          .select()
+          .single()
 
-        const updatedConfig = {
-          ...config,
-          banners: [newBanner, ...config.banners],
+        if (insertErr) {
+          console.error('Erro ao salvar banner no Supabase:', insertErr)
+          showToast('Erro ao gravar banner no banco: ' + insertErr.message)
+        } else if (inserted) {
+          const newBanner: VitrineBanner = {
+            id: String(inserted.id),
+            title: inserted.title,
+            subtitle: inserted.subtitle || undefined,
+            buttonText: inserted.button_text,
+            linkUrl: inserted.link_url || undefined,
+            imageUrl: inserted.image_url,
+            imageUrlMobile: inserted.image_url_mobile || undefined,
+            isActive: inserted.is_active,
+          }
+
+          const updatedConfig = {
+            ...config,
+            banners: [newBanner, ...config.banners],
+          }
+
+          setConfig(updatedConfig)
+          saveVitrineConfig(updatedConfig)
+          showToast('Banner salvo e publicado com sucesso!')
+          setShowAddBannerModal(false)
         }
-
-        setConfig(updatedConfig)
-        saveVitrineConfig(updatedConfig)
-        showToast('Banner salvo e publicado com sucesso!')
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Falha geral ao salvar banner:', err)
-      showToast('Erro ao salvar banner.')
+      showToast('Erro ao salvar banner: ' + (err?.message || 'Erro inesperado.'))
     } finally {
       setIsSaving(false)
-      setShowAddBannerModal(false)
-      setBannerTitle('')
-      setBannerSubtitle('')
-      setBannerBtnText('')
-      setBannerLink('')
-      setBannerImageUrl('')
     }
   }
 
@@ -443,7 +531,14 @@ export function CarrosselVitrinePage({ onBack, onNavigateToStore }: CarrosselVit
     showToast('Banner removido da vitrine.')
 
     try {
-      await supabase.from('banners').delete().eq('id', bannerId)
+      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(bannerId)
+      if (isUuid) {
+        const { error } = await supabase.from('banners').delete().eq('id', bannerId)
+        if (error) {
+          console.error('Erro ao excluir banner do Supabase:', error)
+          showToast('Aviso: erro ao excluir do banco (' + error.message + ')')
+        }
+      }
     } catch (err) {
       console.error('Erro ao excluir banner do banco:', err)
     }
@@ -483,7 +578,7 @@ export function CarrosselVitrinePage({ onBack, onNavigateToStore }: CarrosselVit
       const res = await uploadFileToR2(file, 'products')
       if (res && res.url) {
         setCatBannerImageUrl(res.url)
-        showToast('Imagem da categoria enviada com sucesso!')
+        showToast('Imagem desktop da categoria enviada com sucesso!')
       }
     } catch (err: any) {
       showToast(err.message || 'Erro durante upload da imagem.')
@@ -493,12 +588,33 @@ export function CarrosselVitrinePage({ onBack, onNavigateToStore }: CarrosselVit
     }
   }
 
+  // Upload de Banner de Categoria (Mobile)
+  const handleCatBannerMobileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    try {
+      setIsUploadingCatBannerMobile(true)
+      const res = await uploadFileToR2(file, 'products')
+      if (res && res.url) {
+        setCatBannerImageUrlMobile(res.url)
+        showToast('Imagem mobile da categoria enviada com sucesso!')
+      }
+    } catch (err: any) {
+      showToast(err.message || 'Erro durante upload da imagem mobile.')
+    } finally {
+      setIsUploadingCatBannerMobile(false)
+      if (catBannerMobileFileInputRef.current) catBannerMobileFileInputRef.current.value = ''
+    }
+  }
+
   const handleOpenAddCatBanner = () => {
     setEditingCatBannerId(null)
     setCatBannerTitle('')
     setCatBannerBtnText('CONFERIR')
     setCatBannerLink('')
     setCatBannerImageUrl('')
+    setCatBannerImageUrlMobile('')
     setShowCatBannerModal(true)
   }
 
@@ -508,6 +624,7 @@ export function CarrosselVitrinePage({ onBack, onNavigateToStore }: CarrosselVit
     setCatBannerBtnText(banner.buttonText || '')
     setCatBannerLink(banner.linkUrl || '')
     setCatBannerImageUrl(banner.imageUrl || '')
+    setCatBannerImageUrlMobile(banner.imageUrlMobile || '')
     setShowCatBannerModal(true)
   }
 
@@ -524,6 +641,7 @@ export function CarrosselVitrinePage({ onBack, onNavigateToStore }: CarrosselVit
       button_text: catBannerBtnText.trim() || null,
       link_url: catBannerLink.trim() || null,
       image_url: catBannerImageUrl.trim() || null,
+      image_url_mobile: catBannerImageUrlMobile.trim() || null,
       updated_at: new Date().toISOString(),
     }
 
@@ -547,6 +665,7 @@ export function CarrosselVitrinePage({ onBack, onNavigateToStore }: CarrosselVit
                   buttonText: payload.button_text || undefined,
                   linkUrl: payload.link_url || undefined,
                   imageUrl: payload.image_url || undefined,
+                  imageUrlMobile: payload.image_url_mobile || undefined,
                 }
               : cb
           )
@@ -554,6 +673,7 @@ export function CarrosselVitrinePage({ onBack, onNavigateToStore }: CarrosselVit
           setConfig(updatedConfig)
           saveVitrineConfig(updatedConfig)
           showToast('Banner de categoria atualizado!')
+          setShowCatBannerModal(false)
         }
       } else {
         // Inserir nova categoria
@@ -578,6 +698,7 @@ export function CarrosselVitrinePage({ onBack, onNavigateToStore }: CarrosselVit
             buttonText: inserted.button_text || undefined,
             linkUrl: inserted.link_url || undefined,
             imageUrl: inserted.image_url || undefined,
+            imageUrlMobile: inserted.image_url_mobile || undefined,
             isActive: inserted.is_active,
             sortOrder: inserted.sort_order,
           }
@@ -588,14 +709,14 @@ export function CarrosselVitrinePage({ onBack, onNavigateToStore }: CarrosselVit
           setConfig(updatedConfig)
           saveVitrineConfig(updatedConfig)
           showToast('Banner de categoria adicionado com sucesso!')
+          setShowCatBannerModal(false)
         }
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Falha geral ao salvar categoria:', err)
-      showToast('Erro ao salvar categoria.')
+      showToast('Erro ao salvar categoria: ' + (err?.message || 'Erro inesperado.'))
     } finally {
       setIsSaving(false)
-      setShowCatBannerModal(false)
     }
   }
 
@@ -630,7 +751,14 @@ export function CarrosselVitrinePage({ onBack, onNavigateToStore }: CarrosselVit
     showToast('Banner de categoria removido.')
 
     try {
-      await supabase.from('category_banners').delete().eq('id', id)
+      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)
+      if (isUuid) {
+        const { error } = await supabase.from('category_banners').delete().eq('id', id)
+        if (error) {
+          console.error('Erro ao excluir categoria do Supabase:', error)
+          showToast('Aviso: erro ao excluir do banco (' + error.message + ')')
+        }
+      }
     } catch (err) {
       console.error('Erro ao excluir categoria do banco:', err)
     }
@@ -688,30 +816,57 @@ export function CarrosselVitrinePage({ onBack, onNavigateToStore }: CarrosselVit
         console.error('Erro ao salvar configurações de vitrine no Supabase:', settingsErr)
       }
 
-      // 2. Atualizar ordenação dos banners
-      for (let i = 0; i < config.banners.length; i++) {
-        const b = config.banners[i]
-        await supabase
-          .from('banners')
-          .update({
-            sort_order: i,
-            is_active: b.isActive,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', b.id)
+      const isUuid = (val: string) =>
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val)
+
+      // 2. Sincronizar exclusões de banners no banco
+      const currentBannerIds = config.banners.map((b) => b.id).filter(isUuid)
+      const { data: dbBanners } = await supabase.from('banners').select('id')
+      if (dbBanners) {
+        const toDeleteBanners = dbBanners.filter((b: any) => !currentBannerIds.includes(b.id))
+        for (const item of toDeleteBanners) {
+          await supabase.from('banners').delete().eq('id', item.id)
+        }
       }
 
-      // 3. Atualizar ordenação dos banners de categoria
+      // 3. Atualizar ordenação dos banners
+      for (let i = 0; i < config.banners.length; i++) {
+        const b = config.banners[i]
+        if (isUuid(b.id)) {
+          await supabase
+            .from('banners')
+            .update({
+              sort_order: i,
+              is_active: b.isActive,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', b.id)
+        }
+      }
+
+      // 4. Sincronizar exclusões de banners de categoria no banco
+      const currentCatIds = (config.categoryBanners || []).map((cb) => cb.id).filter(isUuid)
+      const { data: dbCatBanners } = await supabase.from('category_banners').select('id')
+      if (dbCatBanners) {
+        const toDeleteCat = dbCatBanners.filter((cb: any) => !currentCatIds.includes(cb.id))
+        for (const item of toDeleteCat) {
+          await supabase.from('category_banners').delete().eq('id', item.id)
+        }
+      }
+
+      // 5. Atualizar ordenação dos banners de categoria
       for (let i = 0; i < (config.categoryBanners || []).length; i++) {
         const cb = config.categoryBanners[i]
-        await supabase
-          .from('category_banners')
-          .update({
-            sort_order: i,
-            is_active: cb.isActive,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', cb.id)
+        if (isUuid(cb.id)) {
+          await supabase
+            .from('category_banners')
+            .update({
+              sort_order: i,
+              is_active: cb.isActive,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', cb.id)
+        }
       }
 
       saveVitrineConfig(config)
@@ -1347,7 +1502,7 @@ export function CarrosselVitrinePage({ onBack, onNavigateToStore }: CarrosselVit
 
               <button
                 type="button"
-                onClick={() => setShowAddBannerModal(true)}
+                onClick={handleOpenAddBanner}
                 style={{
                   padding: '0.55rem 1rem',
                   fontSize: '0.78rem',
@@ -1420,7 +1575,56 @@ export function CarrosselVitrinePage({ onBack, onNavigateToStore }: CarrosselVit
                             {banner.subtitle}
                           </p>
                         )}
+
+                        <div style={{ marginTop: '0.45rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                          {banner.imageUrlMobile ? (
+                            <span
+                              style={{
+                                fontSize: '0.68rem',
+                                color: '#047857',
+                                backgroundColor: '#ecfdf5',
+                                border: '1px solid #a7f3d0',
+                                padding: '2px 6px',
+                                fontWeight: 400,
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '3px',
+                              }}
+                            >
+                              📱 Versão Mobile ativa
+                            </span>
+                          ) : (
+                            <span
+                              style={{
+                                fontSize: '0.68rem',
+                                color: '#6b7280',
+                                backgroundColor: '#f3f4f6',
+                                padding: '2px 6px',
+                                fontWeight: 400,
+                              }}
+                            >
+                              💻 Desktop apenas
+                            </span>
+                          )}
+                        </div>
+
                         <div style={{ marginTop: 'auto', paddingTop: '1rem', display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
+                          <button
+                            type="button"
+                            onClick={() => handleOpenEditBanner(banner)}
+                            style={{
+                              padding: '0.35rem 0.65rem',
+                              fontSize: '0.74rem',
+                              border: '1px solid #d1d5db',
+                              backgroundColor: '#ffffff',
+                              color: '#374151',
+                              cursor: 'pointer',
+                              fontWeight: 400,
+                              fontFamily: 'inherit',
+                            }}
+                          >
+                            Editar
+                          </button>
                           <button
                             type="button"
                             onClick={() => handleToggleBannerActive(banner.id)}
@@ -1710,6 +1914,38 @@ export function CarrosselVitrinePage({ onBack, onNavigateToStore }: CarrosselVit
                           </span>
                         )}
 
+                        <div style={{ marginTop: '0.2rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                          {cb.imageUrlMobile ? (
+                            <span
+                              style={{
+                                fontSize: '0.68rem',
+                                color: '#047857',
+                                backgroundColor: '#ecfdf5',
+                                border: '1px solid #a7f3d0',
+                                padding: '2px 6px',
+                                fontWeight: 400,
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '3px',
+                              }}
+                            >
+                              📱 Versão Mobile ativa
+                            </span>
+                          ) : (
+                            <span
+                              style={{
+                                fontSize: '0.68rem',
+                                color: '#6b7280',
+                                backgroundColor: '#f3f4f6',
+                                padding: '2px 6px',
+                                fontWeight: 400,
+                              }}
+                            >
+                              💻 Desktop apenas
+                            </span>
+                          )}
+                        </div>
+
                         <div
                           style={{
                             marginTop: 'auto',
@@ -1949,7 +2185,7 @@ export function CarrosselVitrinePage({ onBack, onNavigateToStore }: CarrosselVit
 
         {/* Live Preview Section */}
         <div style={{ marginTop: '2.5rem', backgroundColor: '#ffffff', border: '1px solid #e5e7eb', padding: '1.5rem' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', borderBottom: '1px solid #f3f4f6', paddingBottom: '0.75rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', borderBottom: '1px solid #f3f4f6', paddingBottom: '0.75rem', flexWrap: 'wrap', gap: '0.75rem' }}>
             <div>
               <span style={{ fontSize: '0.75rem', letterSpacing: '0.06em', textTransform: 'uppercase', color: '#9ca3af', fontWeight: 400 }}>
                 PRÉ-VISUALIZAÇÃO AO VIVO
@@ -1958,117 +2194,256 @@ export function CarrosselVitrinePage({ onBack, onNavigateToStore }: CarrosselVit
                 Como o cliente visualiza a vitrine na loja
               </h4>
             </div>
-            <span style={{ fontSize: '0.76rem', color: '#6b7280', fontWeight: 400 }}>
-              {displayPreviewList.length} produto(s) exibido(s)
-            </span>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+              <span style={{ fontSize: '0.76rem', color: '#6b7280', fontWeight: 400 }}>
+                {displayPreviewList.length} produto(s) exibido(s)
+              </span>
+
+              {/* Seletor de Dispositivo */}
+              <div style={{ display: 'inline-flex', backgroundColor: '#f3f4f6', padding: '2px', borderRadius: '6px', border: '1px solid #e5e7eb' }}>
+                <button
+                  type="button"
+                  onClick={() => setPreviewDevice('desktop')}
+                  style={{
+                    padding: '4px 10px',
+                    fontSize: '0.74rem',
+                    border: 'none',
+                    backgroundColor: previewDevice === 'desktop' ? '#ffffff' : 'transparent',
+                    color: previewDevice === 'desktop' ? '#111827' : '#6b7280',
+                    fontWeight: previewDevice === 'desktop' ? 500 : 400,
+                    borderRadius: '4px',
+                    cursor: 'pointer',
+                    boxShadow: previewDevice === 'desktop' ? '0 1px 2px rgba(0,0,0,0.08)' : 'none',
+                    fontFamily: 'inherit',
+                  }}
+                >
+                  💻 Desktop
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPreviewDevice('mobile')}
+                  style={{
+                    padding: '4px 10px',
+                    fontSize: '0.74rem',
+                    border: 'none',
+                    backgroundColor: previewDevice === 'mobile' ? '#ffffff' : 'transparent',
+                    color: previewDevice === 'mobile' ? '#111827' : '#6b7280',
+                    fontWeight: previewDevice === 'mobile' ? 500 : 400,
+                    borderRadius: '4px',
+                    cursor: 'pointer',
+                    boxShadow: previewDevice === 'mobile' ? '0 1px 2px rgba(0,0,0,0.08)' : 'none',
+                    fontFamily: 'inherit',
+                  }}
+                >
+                  📱 Mobile (375px)
+                </button>
+              </div>
+            </div>
           </div>
 
-          <div style={{ padding: '1rem', backgroundColor: '#fafafa', border: '1px solid #f0f0f0' }}>
-            <h3 style={{ margin: '0 0 1rem', fontSize: '1.2rem', fontWeight: 400, textTransform: 'uppercase', color: '#111827' }}>
-              {config.sectionTitle || 'Os Queridinhos'}
-            </h3>
-
-            {displayPreviewList.length === 0 ? (
-              <p style={{ fontSize: '0.84rem', color: '#6b7280', fontWeight: 400 }}>
-                Nenhum produto cadastrado na vitrine.
-              </p>
-            ) : (
-              <div style={{ display: 'flex', gap: '1rem', overflowX: 'auto', paddingBottom: '0.5rem' }}>
-                {displayPreviewList.map((p) => {
-                  const tag = config.customTags[p.id]
-
-                  return (
-                    <div
-                      key={p.id}
-                      style={{
-                        width: '200px',
-                        flexShrink: 0,
-                        backgroundColor: '#ffffff',
-                        border: '1px solid #e5e7eb',
-                        padding: '0.75rem',
-                      }}
-                    >
-                      <div
-                        style={{
-                          width: '100%',
-                          aspectRatio: '1/1',
-                          backgroundColor: '#f3f4f6',
-                          position: 'relative',
-                          overflow: 'hidden',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                        }}
-                      >
-                        {tag && (
-                          <span
-                            style={{
-                              position: 'absolute',
-                              top: '6px',
-                              left: '6px',
-                              backgroundColor: '#000000',
-                              color: '#ffffff',
-                              fontSize: '0.62rem',
-                              fontWeight: 400,
-                              padding: '2px 5px',
-                              textTransform: 'uppercase',
-                              zIndex: 2,
-                            }}
-                          >
-                            {tag}
-                          </span>
-                        )}
-                        {p.imageUrl ? (
-                          <img src={p.imageUrl} alt={p.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                        ) : (
-                          <span style={{ color: '#9ca3af', fontSize: '0.75rem', fontWeight: 400 }}>Sem foto</span>
-                        )}
-                      </div>
-                      <div style={{ padding: '0.5rem 0' }}>
-                        <span style={{ fontSize: '0.82rem', color: '#111827', fontWeight: 400, display: 'block', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                          {p.name}
-                        </span>
-                        <span style={{ fontSize: '0.9rem', color: '#111827', fontWeight: 400, marginTop: '0.2rem', display: 'block' }}>
-                          {p.promoPriceFormatted || p.priceFormatted}
-                        </span>
-                      </div>
-                    </div>
-                  )
-                })}
+          {/* Container da Pré-visualização com simulação de moldura de celular */}
+          <div
+            style={{
+              maxWidth: previewDevice === 'mobile' ? '375px' : '100%',
+              margin: previewDevice === 'mobile' ? '0 auto' : '0',
+              border: previewDevice === 'mobile' ? '8px solid #1f2937' : '1px solid #f0f0f0',
+              borderRadius: previewDevice === 'mobile' ? '28px' : '0',
+              boxShadow: previewDevice === 'mobile' ? '0 20px 25px -5px rgba(0,0,0,0.15), 0 8px 10px -6px rgba(0,0,0,0.1)' : 'none',
+              backgroundColor: '#fafafa',
+              overflow: 'hidden',
+              transition: 'all 0.3s ease',
+            }}
+          >
+            {/* Top Notch do Celular se mobile */}
+            {previewDevice === 'mobile' && (
+              <div style={{ backgroundColor: '#1f2937', height: '18px', display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
+                <div style={{ width: '48px', height: '4px', backgroundColor: '#374151', borderRadius: '2px' }} />
               </div>
             )}
+
+            {/* Banner Ativo na Prévia */}
+            {config.banners.filter((b) => b.isActive).length > 0 && (() => {
+              const activeB = config.banners.filter((b) => b.isActive)[0]
+              const hasMobileImg = previewDevice === 'mobile' && !!activeB.imageUrlMobile
+              const imgUrl = hasMobileImg ? activeB.imageUrlMobile : activeB.imageUrl
+
+              return (
+                <div
+                  style={{
+                    position: 'relative',
+                    width: '100%',
+                    aspectRatio: previewDevice === 'mobile' ? (hasMobileImg ? '1 / 1' : '16 / 10') : '21 / 9',
+                    backgroundColor: '#111827',
+                    overflow: 'hidden',
+                  }}
+                >
+                  <img
+                    src={imgUrl}
+                    alt={activeB.title}
+                    style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+                  />
+                  <div
+                    style={{
+                      position: 'absolute',
+                      bottom: '8px',
+                      left: '8px',
+                      backgroundColor: 'rgba(0, 0, 0, 0.65)',
+                      backdropFilter: 'blur(4px)',
+                      color: '#ffffff',
+                      padding: '3px 7px',
+                      fontSize: '0.64rem',
+                      fontWeight: 400,
+                      borderRadius: '3px',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                    }}
+                  >
+                    {previewDevice === 'mobile'
+                      ? hasMobileImg
+                        ? '📱 Banner Mobile Ativo (Otimizado)'
+                        : '⚠️ Exibindo versão desktop adaptada'
+                      : '💻 Banner Desktop'}
+                  </div>
+                </div>
+              )
+            })()}
+
+            <div style={{ padding: previewDevice === 'mobile' ? '1rem 0.75rem' : '1rem' }}>
+              <h3
+                style={{
+                  margin: '0 0 1rem',
+                  fontSize: previewDevice === 'mobile' ? '1rem' : '1.2rem',
+                  fontWeight: 400,
+                  textTransform: 'uppercase',
+                  color: '#111827',
+                }}
+              >
+                {config.sectionTitle || 'Os Queridinhos'}
+              </h3>
+
+              {displayPreviewList.length === 0 ? (
+                <p style={{ fontSize: '0.84rem', color: '#6b7280', fontWeight: 400 }}>
+                  Nenhum produto cadastrado na vitrine.
+                </p>
+              ) : (
+                <div
+                  style={{
+                    display: 'flex',
+                    gap: previewDevice === 'mobile' ? '0.75rem' : '1rem',
+                    overflowX: 'auto',
+                    paddingBottom: '0.5rem',
+                    scrollSnapType: 'x mandatory',
+                    WebkitOverflowScrolling: 'touch',
+                  }}
+                >
+                  {displayPreviewList.map((p) => {
+                    const tag = config.customTags[p.id]
+
+                    return (
+                      <div
+                        key={p.id}
+                        style={{
+                          width: previewDevice === 'mobile' ? '74%' : '200px',
+                          minWidth: previewDevice === 'mobile' ? '200px' : '200px',
+                          flexShrink: 0,
+                          scrollSnapAlign: 'start',
+                          backgroundColor: '#ffffff',
+                          border: '1px solid #e5e7eb',
+                          padding: '0.75rem',
+                          boxSizing: 'border-box',
+                        }}
+                      >
+                        <div
+                          style={{
+                            width: '100%',
+                            aspectRatio: '1/1',
+                            backgroundColor: '#f3f4f6',
+                            position: 'relative',
+                            overflow: 'hidden',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                          }}
+                        >
+                          {tag && (
+                            <span
+                              style={{
+                                position: 'absolute',
+                                top: '6px',
+                                left: '6px',
+                                backgroundColor: '#000000',
+                                color: '#ffffff',
+                                fontSize: '0.62rem',
+                                fontWeight: 400,
+                                padding: '2px 5px',
+                                textTransform: 'uppercase',
+                                zIndex: 2,
+                              }}
+                            >
+                              {tag}
+                            </span>
+                          )}
+                          {p.imageUrl ? (
+                            <img src={p.imageUrl} alt={p.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                          ) : (
+                            <span style={{ color: '#9ca3af', fontSize: '0.75rem', fontWeight: 400 }}>Sem foto</span>
+                          )}
+                        </div>
+                        <div style={{ padding: '0.5rem 0' }}>
+                          <span style={{ fontSize: '0.82rem', color: '#111827', fontWeight: 400, display: 'block', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            {p.name}
+                          </span>
+                          <span style={{ fontSize: '0.9rem', color: '#111827', fontWeight: 400, marginTop: '0.2rem', display: 'block' }}>
+                            {p.promoPriceFormatted || p.priceFormatted}
+                          </span>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </div>
 
-      {/* Modal Adicionar Banner */}
+      {/* Modal Adicionar / Editar Banner */}
       {showAddBannerModal && (
-        <div className="category-modal-overlay" onClick={() => setShowAddBannerModal(false)}>
-          <div className="category-modal-card" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '480px' }}>
+        <div className="category-modal-overlay" onClick={() => { setShowAddBannerModal(false); setEditingBannerId(null) }}>
+          <div className="category-modal-card" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '520px' }}>
             <div className="category-modal-header">
               <div>
-                <h3 className="category-modal-title" style={{ fontWeight: 400 }}>Adicionar Banner à Vitrine</h3>
+                <h3 className="category-modal-title" style={{ fontWeight: 400 }}>
+                  {editingBannerId ? 'Editar Banner da Vitrine' : 'Adicionar Banner à Vitrine'}
+                </h3>
                 <span className="category-modal-subtitle" style={{ fontWeight: 400 }}>
-                  Faça o upload da imagem ou informe uma URL
+                  {editingBannerId
+                    ? 'Atualize as imagens e links do banner da vitrine'
+                    : 'Faça o upload das imagens desktop e mobile'}
                 </span>
               </div>
               <button
                 type="button"
                 className="category-modal-close"
-                onClick={() => setShowAddBannerModal(false)}
+                onClick={() => { setShowAddBannerModal(false); setEditingBannerId(null) }}
               >
                 &times;
               </button>
             </div>
 
             <div className="category-modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+              {/* Imagem Desktop */}
               <div className="form-group-custom">
-                <label className="form-label-custom" style={{ fontWeight: 400 }}>Imagem do Banner *</label>
+                <label className="form-label-custom" style={{ fontWeight: 400 }}>
+                  💻 Imagem Desktop (Recomendado: 1920x600 ou 21:9) *
+                </label>
                 <div style={{ display: 'flex', gap: '0.5rem' }}>
                   <input
                     type="text"
                     className="form-input-custom"
-                    placeholder="URL da imagem ou faça upload ao lado..."
+                    placeholder="URL da imagem desktop ou faça upload..."
                     value={bannerImageUrl}
                     onChange={(e) => setBannerImageUrl(e.target.value)}
                     style={{ fontWeight: 400 }}
@@ -2102,10 +2477,61 @@ export function CarrosselVitrinePage({ onBack, onNavigateToStore }: CarrosselVit
               </div>
 
               {bannerImageUrl && (
-                <div style={{ width: '100%', height: '110px', backgroundColor: '#e5e7eb', overflow: 'hidden' }}>
-                  <img src={bannerImageUrl} alt="Prévia" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                <div style={{ width: '100%', height: '100px', backgroundColor: '#e5e7eb', overflow: 'hidden' }}>
+                  <img src={bannerImageUrl} alt="Prévia Desktop" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                 </div>
               )}
+
+              {/* Imagem Mobile Dedicada */}
+              <div className="form-group-custom" style={{ backgroundColor: '#f9fafb', padding: '0.75rem', border: '1px solid #e5e7eb' }}>
+                <label className="form-label-custom" style={{ fontWeight: 500, color: '#111827' }}>
+                  📱 Imagem para Celulares / Mobile (Opcional - Recomendado: 1:1 ou 4:5)
+                </label>
+                <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.35rem' }}>
+                  <input
+                    type="text"
+                    className="form-input-custom"
+                    placeholder="URL da imagem mobile ou faça upload..."
+                    value={bannerImageUrlMobile}
+                    onChange={(e) => setBannerImageUrlMobile(e.target.value)}
+                    style={{ fontWeight: 400, backgroundColor: '#ffffff' }}
+                  />
+                  <input
+                    type="file"
+                    ref={bannerMobileFileInputRef}
+                    accept="image/*"
+                    style={{ display: 'none' }}
+                    onChange={handleBannerMobileUpload}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => bannerMobileFileInputRef.current?.click()}
+                    disabled={isUploadingBannerMobile}
+                    style={{
+                      padding: '0 0.85rem',
+                      fontSize: '0.76rem',
+                      fontWeight: 400,
+                      backgroundColor: '#111827',
+                      border: '1px solid #111827',
+                      color: '#ffffff',
+                      cursor: isUploadingBannerMobile ? 'not-allowed' : 'pointer',
+                      whiteSpace: 'nowrap',
+                      fontFamily: 'inherit',
+                    }}
+                  >
+                    {isUploadingBannerMobile ? 'Enviando...' : 'Upload Mobile'}
+                  </button>
+                </div>
+                <span style={{ fontSize: '0.72rem', color: '#6b7280', marginTop: '0.35rem', display: 'block' }}>
+                  💡 Em smartphones, esta imagem será carregada exclusivamente, proporcionando carregamento ultra rápido e visualização perfeita sem cortes horizontais.
+                </span>
+
+                {bannerImageUrlMobile && (
+                  <div style={{ marginTop: '0.5rem', width: '100px', height: '100px', backgroundColor: '#e5e7eb', overflow: 'hidden', border: '1px solid #d1d5db' }}>
+                    <img src={bannerImageUrlMobile} alt="Prévia Mobile" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                  </div>
+                )}
+              </div>
 
               <div className="form-group-custom">
                 <label className="form-label-custom" style={{ fontWeight: 400 }}>Título do Banner</label>
@@ -2162,7 +2588,7 @@ export function CarrosselVitrinePage({ onBack, onNavigateToStore }: CarrosselVit
                 type="button"
                 className="product-create-discard-btn"
                 style={{ fontWeight: 400 }}
-                onClick={() => setShowAddBannerModal(false)}
+                onClick={() => { setShowAddBannerModal(false); setEditingBannerId(null) }}
               >
                 Cancelar
               </button>
@@ -2172,7 +2598,7 @@ export function CarrosselVitrinePage({ onBack, onNavigateToStore }: CarrosselVit
                 style={{ fontWeight: 400 }}
                 onClick={handleSaveBanner}
               >
-                Salvar Banner
+                {editingBannerId ? 'Salvar Alterações' : 'Salvar Banner'}
               </button>
             </div>
           </div>
@@ -2203,12 +2629,12 @@ export function CarrosselVitrinePage({ onBack, onNavigateToStore }: CarrosselVit
 
             <div className="category-modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
               <div className="form-group-custom">
-                <label className="form-label-custom" style={{ fontWeight: 400 }}>Imagem da Categoria (opcional)</label>
+                <label className="form-label-custom" style={{ fontWeight: 400 }}>💻 Imagem Desktop da Categoria (opcional)</label>
                 <div style={{ display: 'flex', gap: '0.5rem' }}>
                   <input
                     type="text"
                     className="form-input-custom"
-                    placeholder="URL da imagem ou faça upload..."
+                    placeholder="URL da imagem desktop ou faça upload..."
                     value={catBannerImageUrl}
                     onChange={(e) => setCatBannerImageUrl(e.target.value)}
                     style={{ fontWeight: 400 }}
@@ -2246,9 +2672,57 @@ export function CarrosselVitrinePage({ onBack, onNavigateToStore }: CarrosselVit
 
               {catBannerImageUrl && (
                 <div style={{ width: '100%', height: '110px', backgroundColor: '#e5e7eb', overflow: 'hidden' }}>
-                  <img src={catBannerImageUrl} alt="Prévia" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                  <img src={catBannerImageUrl} alt="Prévia Desktop" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                 </div>
               )}
+
+              {/* Imagem Mobile da Categoria */}
+              <div className="form-group-custom" style={{ backgroundColor: '#f9fafb', padding: '0.75rem', border: '1px solid #e5e7eb' }}>
+                <label className="form-label-custom" style={{ fontWeight: 500, color: '#111827' }}>
+                  📱 Imagem Mobile da Categoria (opcional)
+                </label>
+                <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.35rem' }}>
+                  <input
+                    type="text"
+                    className="form-input-custom"
+                    placeholder="URL da imagem mobile ou faça upload..."
+                    value={catBannerImageUrlMobile}
+                    onChange={(e) => setCatBannerImageUrlMobile(e.target.value)}
+                    style={{ fontWeight: 400, backgroundColor: '#ffffff' }}
+                  />
+                  <input
+                    type="file"
+                    ref={catBannerMobileFileInputRef}
+                    accept="image/*"
+                    style={{ display: 'none' }}
+                    onChange={handleCatBannerMobileUpload}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => catBannerMobileFileInputRef.current?.click()}
+                    disabled={isUploadingCatBannerMobile}
+                    style={{
+                      padding: '0 0.85rem',
+                      fontSize: '0.76rem',
+                      fontWeight: 400,
+                      backgroundColor: '#111827',
+                      border: '1px solid #111827',
+                      color: '#ffffff',
+                      cursor: isUploadingCatBannerMobile ? 'not-allowed' : 'pointer',
+                      whiteSpace: 'nowrap',
+                      fontFamily: 'inherit',
+                    }}
+                  >
+                    {isUploadingCatBannerMobile ? 'Enviando...' : 'Upload Mobile'}
+                  </button>
+                </div>
+
+                {catBannerImageUrlMobile && (
+                  <div style={{ marginTop: '0.5rem', width: '100px', height: '100px', backgroundColor: '#e5e7eb', overflow: 'hidden', border: '1px solid #d1d5db' }}>
+                    <img src={catBannerImageUrlMobile} alt="Prévia Mobile" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                  </div>
+                )}
+              </div>
 
               <div className="form-group-custom">
                 <label className="form-label-custom" style={{ fontWeight: 400 }}>Título da Categoria *</label>

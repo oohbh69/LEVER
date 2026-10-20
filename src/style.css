@@ -203,6 +203,126 @@ body {
   color: #6b7280;
 }
 
+/* ========================================================
+   SKELETON SCREENS COM SHIMMER (ESTRUTURA DE ALTA PERFORMANCE)
+   ======================================================== */
+@keyframes shimmerLoading {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.shimmer-animated {
+  background: linear-gradient(
+    90deg,
+    #f3f4f6 0%,
+    #ebeef2 35%,
+    #f8fafc 50%,
+    #ebeef2 65%,
+    #f3f4f6 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmerLoading 1.5s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+.banner-active-container {
+  position: relative;
+  width: 100%;
+  overflow: hidden;
+  background-color: #f3f4f6;
+  aspect-ratio: 21 / 9;
+  min-height: 260px;
+  max-height: 580px;
+}
+
+@media (max-width: 768px) {
+  .banner-active-container {
+    aspect-ratio: 16 / 10;
+    min-height: 220px;
+  }
+
+  .banner-active-container.has-mobile-banner {
+    aspect-ratio: 4 / 5;
+    min-height: 320px;
+    max-height: 520px;
+  }
+}
+
+@media (max-width: 480px) {
+  .banner-active-container.has-mobile-banner {
+    aspect-ratio: 1 / 1;
+    min-height: 300px;
+  }
+}
+
+.skeleton-card {
+  flex: 0 0 calc((100% - 3.75rem) / 4);
+  min-width: 240px;
+  display: flex;
+  flex-direction: column;
+  background-color: #ffffff;
+}
+
+@media (max-width: 1024px) {
+  .skeleton-card {
+    flex: 0 0 calc((100% - 2.5rem) / 3);
+  }
+}
+
+@media (max-width: 768px) {
+  .skeleton-card {
+    flex: 0 0 calc((100% - 1.25rem) / 2);
+    min-width: 180px;
+  }
+}
+
+@media (max-width: 480px) {
+  .skeleton-card {
+    flex: 0 0 75%;
+    min-width: 200px;
+  }
+}
+
+.skeleton-box {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  background-color: #f3f4f6;
+}
+
+.skeleton-line {
+  height: 14px;
+  border-radius: 2px;
+  margin-top: 8px;
+}
+
+.skeleton-line.sm {
+  width: 45%;
+  height: 12px;
+}
+
+.skeleton-line.md {
+  width: 75%;
+}
+
+.skeleton-btn {
+  height: 42px;
+  width: 100%;
+  margin-top: 14px;
+}
+
+/* Transição suave e progressiva de carregamento de fotos */
+.img-smooth-load {
+  opacity: 0;
+  transition: opacity 0.35s ease-in-out;
+}
+
+.img-smooth-load.is-loaded {
+  opacity: 1;
+}
+
 /* Carrossel Os Queridinhos */
 .favorites-section {
   width: 100%;
@@ -286,6 +406,7 @@ body {
   flex: 0 0 calc((100% - 3.75rem) / 4); /* 4 visíveis em telas grandes */
   min-width: 240px;
   scroll-snap-align: start;
+  scroll-snap-stop: always;
   display: flex;
   flex-direction: column;
   background-color: #ffffff;
@@ -311,8 +432,14 @@ body {
 
 @media (max-width: 480px) {
   .product-card {
-    flex: 0 0 75%;
+    flex: 0 0 74%;
     min-width: 200px;
+  }
+}
+
+@media (hover: none) and (pointer: coarse) {
+  .product-card:active {
+    transform: scale(0.98);
   }
 }
 

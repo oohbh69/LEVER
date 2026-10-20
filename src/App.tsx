@@ -140,22 +140,66 @@ function AppContent() {
   const [selectedProductName, setSelectedProductName] = useState('')
   const [selectedProductId, setSelectedProductId] = useState<string | null>(getInitialProductId)
   const [addedCardId, setAddedCardId] = useState<string | number | null>(null)
-  const [favoriteProducts, setFavoriteProducts] = useState<Product[]>([])
-  const [isLoadingProducts, setIsLoadingProducts] = useState(true)
   const [session, setSession] = useState<Session | null>(null)
   const [isAuthLoading, setIsAuthLoading] = useState(true)
   const [vitrineConfig, setVitrineConfig] = useState<VitrineConfig>(getVitrineConfig)
   const [currentSlideIndex, setCurrentSlideIndex] = useState(0)
 
+  // Cache instantâneo para carregamento em 0ms (Stale-While-Revalidate)
+  const [rawProducts, setRawProducts] = useState<any[]>(() => {
+    try {
+      const raw = localStorage.getItem('lever_cached_vitrine_products')
+      if (raw) return JSON.parse(raw)
+    } catch (_) {}
+    return []
+  })
+  const [isLoadingProducts, setIsLoadingProducts] = useState(() => {
+    try {
+      const raw = localStorage.getItem('lever_cached_vitrine_products')
+      return !raw || JSON.parse(raw).length === 0
+    } catch (_) {
+      return true
+    }
+  })
+
+  // Carregamento paralelo e unificado de dados (zero double-fetch)
   useEffect(() => {
     let isMounted = true
 
-    // Carregar banners e configurações reais do banco Supabase
-    fetchVitrineConfigFromSupabase().then((cfg) => {
-      if (isMounted && cfg) {
-        setVitrineConfig(cfg)
+    async function loadStorefrontData() {
+      try {
+        const [configData, productsRes] = await Promise.all([
+          fetchVitrineConfigFromSupabase(),
+          supabase
+            .from('products')
+            .select('id, name, price, promo_price, visibility, product_images(image_url, is_cover, sort_order)')
+            .eq('visibility', 'visivel')
+            .order('created_at', { ascending: false })
+            .limit(24),
+        ])
+
+        if (!isMounted) return
+
+        if (configData) {
+          setVitrineConfig(configData)
+        }
+
+        if (productsRes.data) {
+          setRawProducts(productsRes.data)
+          try {
+            localStorage.setItem('lever_cached_vitrine_products', JSON.stringify(productsRes.data))
+          } catch (_) {}
+        }
+      } catch (err) {
+        console.error('Erro ao sincronizar dados da vitrine:', err)
+      } finally {
+        if (isMounted) {
+          setIsLoadingProducts(false)
+        }
       }
-    })
+    }
+
+    loadStorefrontData()
 
     const handleVitrineUpdate = () => {
       setVitrineConfig(getVitrineConfig())
@@ -166,6 +210,48 @@ function AppContent() {
       window.removeEventListener('vitrine-config-updated', handleVitrineUpdate)
     }
   }, [])
+
+  // Processamento e ordenação da vitrine em memória (0ms, sem re-consulta ao banco)
+  const favoriteProducts = useMemo(() => {
+    if (!rawProducts.length) return []
+    let list: Product[] = rawProducts.map((item: any) => {
+      const rawPrice = Number(item.price) || 0
+      const promo = item.promo_price ? Number(item.promo_price) : null
+      const finalPrice = promo && promo > 0 && promo < rawPrice ? promo : rawPrice
+      const installmentsCalc = (finalPrice / 3).toFixed(2).replace('.', ',')
+
+      const coverImg = item.product_images?.find((img: any) => img.is_cover)?.image_url
+      const firstImg = item.product_images?.[0]?.image_url
+      const primaryImg = coverImg || firstImg || undefined
+
+      const customTag = vitrineConfig.customTags?.[item.id]
+      const defaultTag = promo && promo > 0 && promo < rawPrice ? 'Promoção' : undefined
+
+      return {
+        id: item.id,
+        name: item.name,
+        price: `R$ ${finalPrice.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+        priceNumeric: finalPrice,
+        installments: `3x de R$ ${installmentsCalc} sem juros`,
+        tag: customTag || defaultTag,
+        imageUrl: primaryImg,
+      }
+    })
+
+    if (vitrineConfig.featuredProductIds && vitrineConfig.featuredProductIds.length > 0) {
+      const featuredMap = new Map(list.map((p) => [String(p.id), p]))
+      const orderedList: Product[] = []
+      for (const id of vitrineConfig.featuredProductIds) {
+        const prod = featuredMap.get(String(id))
+        if (prod) orderedList.push(prod)
+      }
+      if (orderedList.length > 0) {
+        list = orderedList
+      }
+    }
+
+    return list
+  }, [rawProducts, vitrineConfig.customTags, vitrineConfig.featuredProductIds])
 
   const activeBanners = useMemo(
     () => vitrineConfig.banners?.filter((b) => b.isActive) || [],
@@ -185,78 +271,6 @@ function AppContent() {
     }, 5500)
     return () => clearInterval(interval)
   }, [activeBanners.length])
-
-  useEffect(() => {
-    let isMounted = true
-
-    async function fetchVitrineProducts() {
-      try {
-        setIsLoadingProducts(true)
-        const { data, error } = await supabase
-          .from('products')
-          .select('*, product_images(*)')
-          .eq('visibility', 'visivel')
-          .order('created_at', { ascending: false })
-
-        if (error) {
-          console.error('Erro ao buscar produtos da vitrine:', error)
-          return
-        }
-
-        if (data && isMounted) {
-          let list: Product[] = data.map((item: any) => {
-            const rawPrice = Number(item.price) || 0
-            const promo = item.promo_price ? Number(item.promo_price) : null
-            const finalPrice = promo && promo > 0 && promo < rawPrice ? promo : rawPrice
-            const installmentsCalc = (finalPrice / 3).toFixed(2).replace('.', ',')
-
-            const coverImg = item.product_images?.find((img: any) => img.is_cover)?.image_url
-            const firstImg = item.product_images?.[0]?.image_url
-            const primaryImg = coverImg || firstImg || undefined
-
-            const customTag = vitrineConfig.customTags[item.id]
-            const defaultTag = promo && promo > 0 && promo < rawPrice ? 'Promoção' : undefined
-
-            return {
-              id: item.id,
-              name: item.name,
-              price: `R$ ${finalPrice.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
-              priceNumeric: finalPrice,
-              installments: `3x de R$ ${installmentsCalc} sem juros`,
-              tag: customTag || defaultTag,
-              imageUrl: primaryImg,
-            }
-          })
-
-          if (vitrineConfig.featuredProductIds && vitrineConfig.featuredProductIds.length > 0) {
-            const featuredMap = new Map(list.map((p) => [String(p.id), p]))
-            const orderedList: Product[] = []
-            for (const id of vitrineConfig.featuredProductIds) {
-              const prod = featuredMap.get(String(id))
-              if (prod) orderedList.push(prod)
-            }
-            if (orderedList.length > 0) {
-              list = orderedList
-            }
-          }
-
-          setFavoriteProducts(list)
-        }
-      } catch (err) {
-        console.error('Erro ao conectar com a vitrine:', err)
-      } finally {
-        if (isMounted) {
-          setIsLoadingProducts(false)
-        }
-      }
-    }
-
-    fetchVitrineProducts()
-
-    return () => {
-      isMounted = false
-    }
-  }, [vitrineConfig])
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -384,6 +398,8 @@ function AppContent() {
   const [isDragging, setIsDragging] = useState(false)
 
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    // Em dispositivos de toque (celulares/tablets), permitir rolagem nativa com inércia de 120Hz
+    if (e.pointerType === 'touch') return
     if (!carouselRef.current) return
     isDraggingRef.current = true
     hasMovedRef.current = false
@@ -392,6 +408,7 @@ function AppContent() {
   }
 
   const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.pointerType === 'touch') return
     if (!isDraggingRef.current || !carouselRef.current) return
     const x = e.pageX - carouselRef.current.offsetLeft
     const walk = x - startXRef.current
@@ -403,7 +420,8 @@ function AppContent() {
     }
   }
 
-  const handlePointerUpOrCancel = () => {
+  const handlePointerUpOrCancel = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.pointerType === 'touch') return
     isDraggingRef.current = false
     setTimeout(() => {
       setIsDragging(false)
@@ -623,11 +641,8 @@ function AppContent() {
 
                   return (
                     <div
-                      className="banner-active-container"
+                      className={`banner-active-container ${activeBanner.imageUrlMobile ? 'has-mobile-banner' : ''}`}
                       style={{
-                        position: 'relative',
-                        width: '100%',
-                        overflow: 'hidden',
                         cursor: activeBanner.linkUrl ? 'pointer' : 'default',
                       }}
                       onClick={() => {
@@ -641,17 +656,29 @@ function AppContent() {
                         }
                       }}
                     >
-                      <img
-                        key={activeBanner.id}
-                        src={activeBanner.imageUrl}
-                        alt={activeBanner.title || 'Banner promocional'}
-                        style={{
-                          width: '100%',
-                          height: 'auto',
-                          display: 'block',
-                          transition: 'opacity 0.4s ease-in-out',
-                        }}
-                      />
+                      <picture style={{ width: '100%', height: '100%', display: 'block' }}>
+                        {activeBanner.imageUrlMobile && (
+                          <source
+                            media="(max-width: 768px)"
+                            srcSet={activeBanner.imageUrlMobile}
+                          />
+                        )}
+                        <img
+                          key={activeBanner.id}
+                          src={activeBanner.imageUrl}
+                          alt={activeBanner.title || 'Banner promocional'}
+                          loading="eager"
+                          fetchPriority="high"
+                          decoding="async"
+                          style={{
+                            width: '100%',
+                            height: '100%',
+                            objectFit: 'cover',
+                            display: 'block',
+                            transition: 'opacity 0.4s ease-in-out',
+                          }}
+                        />
+                      </picture>
 
                       {/* Controles de navegação para múltiplos slides */}
                       {activeBanners.length > 1 && (
@@ -819,32 +846,18 @@ function AppContent() {
               </div>
 
               {isLoadingProducts ? (
-                <div
-                  style={{
-                    padding: '3.5rem 1.5rem',
-                    textAlign: 'center',
-                    color: '#6b7280',
-                    fontWeight: 400,
-                    display: 'flex',
-                    flexDirection: 'column',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: '0.75rem',
-                  }}
-                >
-                  <div
-                    style={{
-                      width: '26px',
-                      height: '26px',
-                      border: '2px solid #e5e7eb',
-                      borderTopColor: '#111827',
-                      borderRadius: '50%',
-                      animation: 'spinLoading 0.8s linear infinite',
-                    }}
-                  />
-                  <p style={{ margin: 0, fontSize: '0.85rem', fontWeight: 400, color: '#6b7280', letterSpacing: '0.02em' }}>
-                    Carregando vitrine...
-                  </p>
+                <div className="carousel-container" style={{ cursor: 'default' }}>
+                  {[1, 2, 3, 4].map((i) => (
+                    <div key={i} className="skeleton-card">
+                      <div className="skeleton-box shimmer-animated" />
+                      <div style={{ padding: '0.75rem 0' }}>
+                        <div className="skeleton-line sm shimmer-animated" />
+                        <div className="skeleton-line md shimmer-animated" />
+                        <div className="skeleton-line sm shimmer-animated" style={{ width: '40%' }} />
+                      </div>
+                      <div className="skeleton-btn shimmer-animated" />
+                    </div>
+                  ))}
                 </div>
               ) : favoriteProducts.length === 0 ? (
                 <div
@@ -939,6 +952,7 @@ function AppContent() {
                             src={product.imageUrl}
                             alt={product.name}
                             loading="lazy"
+                            decoding="async"
                             style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                           />
                         ) : (
@@ -1028,18 +1042,23 @@ function AppContent() {
                       }}
                     >
                       {catBanner.imageUrl ? (
-                        <img
-                          src={catBanner.imageUrl}
-                          alt={catBanner.title}
-                          style={{
-                            position: 'absolute',
-                            inset: 0,
-                            width: '100%',
-                            height: '100%',
-                            objectFit: 'cover',
-                            transition: 'transform 0.4s ease',
-                          }}
-                        />
+                        <picture style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', display: 'block' }}>
+                          {catBanner.imageUrlMobile && (
+                            <source media="(max-width: 768px)" srcSet={catBanner.imageUrlMobile} />
+                          )}
+                          <img
+                            src={catBanner.imageUrl}
+                            alt={catBanner.title}
+                            loading="lazy"
+                            decoding="async"
+                            style={{
+                              width: '100%',
+                              height: '100%',
+                              objectFit: 'cover',
+                              transition: 'transform 0.4s ease',
+                            }}
+                          />
+                        </picture>
                       ) : (
                         <div className="category-banner-placeholder">
                           <svg
