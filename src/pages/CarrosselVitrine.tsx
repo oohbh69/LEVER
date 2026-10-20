@@ -1,6 +1,7 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import { supabase } from '../lib/supabase'
 import { uploadFileToR2 } from '../lib/r2'
+import { generateMobileBannerWebP } from '../lib/imageOptimizer'
 
 export interface VitrineBanner {
   id: string
@@ -231,6 +232,10 @@ export function CarrosselVitrinePage({ onBack, onNavigateToStore }: CarrosselVit
   // Dispositivo de simulação para o Live Preview
   const [previewDevice, setPreviewDevice] = useState<'desktop' | 'mobile'>('desktop')
 
+  // Drag and drop para reordenar produtos no carrossel
+  const [draggedProductId, setDraggedProductId] = useState<string | null>(null)
+  const [dragOverProductId, setDragOverProductId] = useState<string | null>(null)
+
   // Feedback
   const [toastMessage, setToastMessage] = useState<string | null>(null)
   const [isSaving, setIsSaving] = useState(false)
@@ -348,6 +353,29 @@ export function CarrosselVitrinePage({ onBack, onNavigateToStore }: CarrosselVit
     })
   }
 
+  // Reordenar produtos por Drag & Drop (clicar e arrastar)
+  const handleReorderProducts = (sourceId: string, targetId: string) => {
+    if (!sourceId || !targetId || sourceId === targetId) return
+
+    setConfig((prev) => {
+      let ids = [...prev.featuredProductIds]
+
+      // Se ainda não estiver na lista de destaques, insere
+      if (!ids.includes(sourceId)) ids.push(sourceId)
+      if (!ids.includes(targetId)) ids.push(targetId)
+
+      const fromIndex = ids.indexOf(sourceId)
+      const toIndex = ids.indexOf(targetId)
+
+      if (fromIndex === -1 || toIndex === -1) return prev
+
+      const [moved] = ids.splice(fromIndex, 1)
+      ids.splice(toIndex, 0, moved)
+
+      return { ...prev, featuredProductIds: ids }
+    })
+  }
+
   // Adicionar todos os produtos ou limpar seleção
   const handleSelectAll = () => {
     setConfig((prev) => ({
@@ -365,17 +393,46 @@ export function CarrosselVitrinePage({ onBack, onNavigateToStore }: CarrosselVit
     showToast('Seleção do carrossel limpa.')
   }
 
-  // Upload de Banner Desktop
+  // Upload de Banner Desktop com Conversão Automática para WebP e Geração da Versão Mobile
   const handleBannerUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
 
     try {
       setIsUploadingBanner(true)
-      const res = await uploadFileToR2(file, 'products')
+      const res = await uploadFileToR2(file, 'products', undefined, {
+        maxWidth: 1920,
+        quality: 0.84,
+      })
+
       if (res && res.url) {
         setBannerImageUrl(res.url)
-        showToast('Imagem desktop do banner enviada com sucesso!')
+
+        // Se ainda não houver banner mobile configurado, gera e envia automaticamente a versão mobile recortada em WebP
+        if (!bannerImageUrlMobile) {
+          try {
+            setIsUploadingBannerMobile(true)
+            const mobileOpt = await generateMobileBannerWebP(file, undefined, 800)
+            const mobileRes = await uploadFileToR2(mobileOpt.file, 'products', undefined, {
+              skipOptimization: true,
+            })
+            if (mobileRes && mobileRes.url) {
+              setBannerImageUrlMobile(mobileRes.url)
+              showToast(
+                `⚡ Desktop WebP (${Math.round(res.fileSize / 1024)}KB) e Mobile WebP (${Math.round(mobileRes.fileSize / 1024)}KB) gerados com sucesso!`
+              )
+            } else {
+              showToast(`⚡ Imagem desktop convertida para WebP (${Math.round(res.fileSize / 1024)}KB)!`)
+            }
+          } catch (mErr) {
+            console.warn('Não foi possível gerar versão mobile automática:', mErr)
+            showToast(`⚡ Imagem desktop convertida para WebP (${Math.round(res.fileSize / 1024)}KB)!`)
+          } finally {
+            setIsUploadingBannerMobile(false)
+          }
+        } else {
+          showToast(`⚡ Imagem desktop convertida para WebP (${Math.round(res.fileSize / 1024)}KB)!`)
+        }
       }
     } catch (err: any) {
       showToast(err.message || 'Erro durante upload desktop.')
@@ -385,17 +442,21 @@ export function CarrosselVitrinePage({ onBack, onNavigateToStore }: CarrosselVit
     }
   }
 
-  // Upload de Banner Mobile
+  // Upload de Banner Mobile com Conversão Automática para WebP
   const handleBannerMobileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
 
     try {
       setIsUploadingBannerMobile(true)
-      const res = await uploadFileToR2(file, 'products')
+      const res = await uploadFileToR2(file, 'products', undefined, {
+        maxWidth: 800,
+        cropAspectRatio: 4 / 5,
+        quality: 0.82,
+      })
       if (res && res.url) {
         setBannerImageUrlMobile(res.url)
-        showToast('Imagem mobile do banner enviada com sucesso!')
+        showToast(`⚡ Imagem mobile convertida para WebP (${Math.round(res.fileSize / 1024)}KB)!`)
       }
     } catch (err: any) {
       showToast(err.message || 'Erro durante upload mobile.')
@@ -568,17 +629,44 @@ export function CarrosselVitrinePage({ onBack, onNavigateToStore }: CarrosselVit
     }
   }
 
-  // Handlers para Banners de Categoria
+  // Handlers para Banners de Categoria com WebP
   const handleCatBannerUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
 
     try {
       setIsUploadingCatBanner(true)
-      const res = await uploadFileToR2(file, 'products')
+      const res = await uploadFileToR2(file, 'products', undefined, {
+        maxWidth: 1200,
+        quality: 0.82,
+      })
       if (res && res.url) {
         setCatBannerImageUrl(res.url)
-        showToast('Imagem desktop da categoria enviada com sucesso!')
+
+        // Se ainda não houver mobile para categoria, gera automaticamente versão mobile
+        if (!catBannerImageUrlMobile) {
+          try {
+            setIsUploadingCatBannerMobile(true)
+            const mobileOpt = await generateMobileBannerWebP(file, 16 / 9, 640)
+            const mobileRes = await uploadFileToR2(mobileOpt.file, 'products', undefined, {
+              skipOptimization: true,
+            })
+            if (mobileRes && mobileRes.url) {
+              setCatBannerImageUrlMobile(mobileRes.url)
+              showToast(
+                `⚡ Categoria Desktop (${Math.round(res.fileSize / 1024)}KB) e Mobile (${Math.round(mobileRes.fileSize / 1024)}KB) geradas em WebP!`
+              )
+            } else {
+              showToast(`⚡ Imagem da categoria convertida para WebP (${Math.round(res.fileSize / 1024)}KB)!`)
+            }
+          } catch {
+            showToast(`⚡ Imagem da categoria convertida para WebP (${Math.round(res.fileSize / 1024)}KB)!`)
+          } finally {
+            setIsUploadingCatBannerMobile(false)
+          }
+        } else {
+          showToast(`⚡ Imagem da categoria convertida para WebP (${Math.round(res.fileSize / 1024)}KB)!`)
+        }
       }
     } catch (err: any) {
       showToast(err.message || 'Erro durante upload da imagem.')
@@ -588,17 +676,20 @@ export function CarrosselVitrinePage({ onBack, onNavigateToStore }: CarrosselVit
     }
   }
 
-  // Upload de Banner de Categoria (Mobile)
+  // Upload de Banner de Categoria (Mobile) com WebP
   const handleCatBannerMobileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
 
     try {
       setIsUploadingCatBannerMobile(true)
-      const res = await uploadFileToR2(file, 'products')
+      const res = await uploadFileToR2(file, 'products', undefined, {
+        maxWidth: 640,
+        quality: 0.82,
+      })
       if (res && res.url) {
         setCatBannerImageUrlMobile(res.url)
-        showToast('Imagem mobile da categoria enviada com sucesso!')
+        showToast(`⚡ Categoria Mobile convertida para WebP (${Math.round(res.fileSize / 1024)}KB)!`)
       }
     } catch (err: any) {
       showToast(err.message || 'Erro durante upload da imagem mobile.')
@@ -881,21 +972,34 @@ export function CarrosselVitrinePage({ onBack, onNavigateToStore }: CarrosselVit
   }
 
   // Produtos filtrados para exibição na lista
-  const filteredProducts = products.filter((p) => {
-    const isSelected = config.featuredProductIds.includes(p.id)
-    if (filterMode === 'selecionados' && !isSelected) return false
-    if (filterMode === 'nao-selecionados' && isSelected) return false
+  const filteredProducts = useMemo(() => {
+    const list = products.filter((p) => {
+      const isSelected = config.featuredProductIds.includes(p.id)
+      if (filterMode === 'selecionados' && !isSelected) return false
+      if (filterMode === 'nao-selecionados' && isSelected) return false
 
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase()
-      const matchName = p.name.toLowerCase().includes(q)
-      const matchSku = p.sku.toLowerCase().includes(q)
-      const matchCat = p.category?.toLowerCase().includes(q)
-      if (!matchName && !matchSku && !matchCat) return false
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase()
+        const matchName = p.name.toLowerCase().includes(q)
+        const matchSku = p.sku.toLowerCase().includes(q)
+        const matchCat = p.category?.toLowerCase().includes(q)
+        if (!matchName && !matchSku && !matchCat) return false
+      }
+
+      return true
+    })
+
+    // Se estiver filtrando por selecionados ("Na Vitrine"), exibe na ordem exata definida no carrossel
+    if (filterMode === 'selecionados') {
+      list.sort((a, b) => {
+        const idxA = config.featuredProductIds.indexOf(a.id)
+        const idxB = config.featuredProductIds.indexOf(b.id)
+        return idxA - idxB
+      })
     }
 
-    return true
-  })
+    return list
+  }, [products, config.featuredProductIds, filterMode, searchQuery])
 
   // Produtos ativos no carrossel para Live Preview
   const previewProducts = config.featuredProductIds
@@ -1288,7 +1392,7 @@ export function CarrosselVitrinePage({ onBack, onNavigateToStore }: CarrosselVit
                   Catálogo ({filteredProducts.length} produtos listados)
                 </span>
                 <span style={{ fontSize: '0.78rem', color: '#6b7280', fontWeight: 400 }}>
-                  Marque a caixa para exibir o produto no carrossel da vitrine
+                  💡 Clique e arraste (⋮⋮) para reordenar os produtos na vitrine
                 </span>
               </div>
 
@@ -1308,23 +1412,91 @@ export function CarrosselVitrinePage({ onBack, onNavigateToStore }: CarrosselVit
                     const isSelected = config.featuredProductIds.includes(p.id)
                     const orderIndex = config.featuredProductIds.indexOf(p.id)
                     const currentTag = config.customTags[p.id] || ''
+                    const isDragging = draggedProductId === p.id
+                    const isDragOver = dragOverProductId === p.id && !isDragging
 
                     return (
                       <div
                         key={p.id}
+                        draggable={isSelected}
+                        onDragStart={(e) => {
+                          if (!isSelected) return
+                          setDraggedProductId(p.id)
+                          e.dataTransfer.effectAllowed = 'move'
+                          e.dataTransfer.setData('text/plain', p.id)
+                        }}
+                        onDragOver={(e) => {
+                          if (!isSelected) return
+                          e.preventDefault()
+                          e.dataTransfer.dropEffect = 'move'
+                          if (dragOverProductId !== p.id) {
+                            setDragOverProductId(p.id)
+                          }
+                        }}
+                        onDragLeave={() => {
+                          if (dragOverProductId === p.id) {
+                            setDragOverProductId(null)
+                          }
+                        }}
+                        onDrop={(e) => {
+                          e.preventDefault()
+                          if (draggedProductId && draggedProductId !== p.id) {
+                            handleReorderProducts(draggedProductId, p.id)
+                            showToast(`Produto movido para a posição #${orderIndex + 1}`)
+                          }
+                          setDraggedProductId(null)
+                          setDragOverProductId(null)
+                        }}
+                        onDragEnd={() => {
+                          setDraggedProductId(null)
+                          setDragOverProductId(null)
+                        }}
                         style={{
                           padding: '0.85rem 1.25rem',
                           borderBottom: '1px solid #f3f4f6',
+                          borderTop: isDragOver ? '2px solid #000000' : 'none',
                           display: 'flex',
                           alignItems: 'center',
                           justifyContent: 'space-between',
                           gap: '1rem',
-                          backgroundColor: isSelected ? '#fafafa' : '#ffffff',
-                          transition: 'background-color 0.15s ease',
+                          backgroundColor: isDragging
+                            ? '#f3f4f6'
+                            : isDragOver
+                            ? '#f0fdf4'
+                            : isSelected
+                            ? '#fafafa'
+                            : '#ffffff',
+                          opacity: isDragging ? 0.45 : 1,
+                          cursor: isSelected ? 'grab' : 'default',
+                          transition: 'background-color 0.15s ease, opacity 0.15s ease',
+                          userSelect: 'none',
                         }}
                       >
-                        {/* Checkbox + Imagem + Dados */}
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flex: '1 1 auto' }}>
+                        {/* Drag Handle + Checkbox + Imagem + Dados */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flex: '1 1 auto' }}>
+                          {/* Ícone de Drag (Arrastar) */}
+                          <div
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              width: '20px',
+                              height: '24px',
+                              color: isSelected ? '#6b7280' : '#d1d5db',
+                              cursor: isSelected ? 'grab' : 'not-allowed',
+                            }}
+                            title={isSelected ? 'Clique e arraste para reordenar na vitrine' : 'Selecione o produto para poder reordenar'}
+                          >
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                              <circle cx="8.5" cy="6" r="2" />
+                              <circle cx="15.5" cy="6" r="2" />
+                              <circle cx="8.5" cy="12" r="2" />
+                              <circle cx="15.5" cy="12" r="2" />
+                              <circle cx="8.5" cy="18" r="2" />
+                              <circle cx="15.5" cy="18" r="2" />
+                            </svg>
+                          </div>
+
                           <input
                             type="checkbox"
                             checked={isSelected}
@@ -2273,7 +2445,7 @@ export function CarrosselVitrinePage({ onBack, onNavigateToStore }: CarrosselVit
                   style={{
                     position: 'relative',
                     width: '100%',
-                    aspectRatio: previewDevice === 'mobile' ? (hasMobileImg ? '1 / 1' : '16 / 10') : '21 / 9',
+                    aspectRatio: previewDevice === 'mobile' ? '2 / 1' : '21 / 9',
                     backgroundColor: '#111827',
                     overflow: 'hidden',
                   }}
@@ -2311,17 +2483,22 @@ export function CarrosselVitrinePage({ onBack, onNavigateToStore }: CarrosselVit
             })()}
 
             <div style={{ padding: previewDevice === 'mobile' ? '1rem 0.75rem' : '1rem' }}>
-              <h3
-                style={{
-                  margin: '0 0 1rem',
-                  fontSize: previewDevice === 'mobile' ? '1rem' : '1.2rem',
-                  fontWeight: 400,
-                  textTransform: 'uppercase',
-                  color: '#111827',
-                }}
-              >
-                {config.sectionTitle || 'Os Queridinhos'}
-              </h3>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+                <h3
+                  style={{
+                    margin: 0,
+                    fontSize: previewDevice === 'mobile' ? '1rem' : '1.2rem',
+                    fontWeight: 400,
+                    textTransform: 'uppercase',
+                    color: '#111827',
+                  }}
+                >
+                  {config.sectionTitle || 'Os Queridinhos'}
+                </h3>
+                <span style={{ fontSize: '0.72rem', color: '#6b7280', fontWeight: 400 }}>
+                  ✋ Dica: Arraste os cards para reordenar a vitrine
+                </span>
+              </div>
 
               {displayPreviewList.length === 0 ? (
                 <p style={{ fontSize: '0.84rem', color: '#6b7280', fontWeight: 400 }}>
@@ -2338,22 +2515,60 @@ export function CarrosselVitrinePage({ onBack, onNavigateToStore }: CarrosselVit
                     WebkitOverflowScrolling: 'touch',
                   }}
                 >
-                  {displayPreviewList.map((p) => {
+                  {displayPreviewList.map((p, idx) => {
                     const tag = config.customTags[p.id]
+                    const isDragging = draggedProductId === p.id
+                    const isDragOver = dragOverProductId === p.id && !isDragging
 
                     return (
                       <div
                         key={p.id}
+                        draggable={true}
+                        onDragStart={(e) => {
+                          setDraggedProductId(p.id)
+                          e.dataTransfer.effectAllowed = 'move'
+                          e.dataTransfer.setData('text/plain', p.id)
+                        }}
+                        onDragOver={(e) => {
+                          e.preventDefault()
+                          e.dataTransfer.dropEffect = 'move'
+                          if (dragOverProductId !== p.id) {
+                            setDragOverProductId(p.id)
+                          }
+                        }}
+                        onDragLeave={() => {
+                          if (dragOverProductId === p.id) {
+                            setDragOverProductId(null)
+                          }
+                        }}
+                        onDrop={(e) => {
+                          e.preventDefault()
+                          if (draggedProductId && draggedProductId !== p.id) {
+                            handleReorderProducts(draggedProductId, p.id)
+                            showToast(`Ordem alterada para posição #${idx + 1}`)
+                          }
+                          setDraggedProductId(null)
+                          setDragOverProductId(null)
+                        }}
+                        onDragEnd={() => {
+                          setDraggedProductId(null)
+                          setDragOverProductId(null)
+                        }}
                         style={{
                           width: previewDevice === 'mobile' ? '74%' : '200px',
                           minWidth: previewDevice === 'mobile' ? '200px' : '200px',
                           flexShrink: 0,
                           scrollSnapAlign: 'start',
-                          backgroundColor: '#ffffff',
-                          border: '1px solid #e5e7eb',
+                          backgroundColor: isDragging ? '#f3f4f6' : '#ffffff',
+                          border: isDragOver ? '2px solid #000000' : '1px solid #e5e7eb',
                           padding: '0.75rem',
                           boxSizing: 'border-box',
+                          cursor: 'grab',
+                          opacity: isDragging ? 0.45 : 1,
+                          transition: 'all 0.15s ease',
+                          userSelect: 'none',
                         }}
+                        title="Arraste para reposicionar no carrossel"
                       >
                         <div
                           style={{
@@ -2367,6 +2582,21 @@ export function CarrosselVitrinePage({ onBack, onNavigateToStore }: CarrosselVit
                             justifyContent: 'center',
                           }}
                         >
+                          <span
+                            style={{
+                              position: 'absolute',
+                              bottom: '6px',
+                              right: '6px',
+                              backgroundColor: 'rgba(0, 0, 0, 0.75)',
+                              color: '#ffffff',
+                              fontSize: '0.62rem',
+                              fontWeight: 400,
+                              padding: '2px 5px',
+                              zIndex: 2,
+                            }}
+                          >
+                            #{idx + 1}
+                          </span>
                           {tag && (
                             <span
                               style={{
@@ -2485,7 +2715,7 @@ export function CarrosselVitrinePage({ onBack, onNavigateToStore }: CarrosselVit
               {/* Imagem Mobile Dedicada */}
               <div className="form-group-custom" style={{ backgroundColor: '#f9fafb', padding: '0.75rem', border: '1px solid #e5e7eb' }}>
                 <label className="form-label-custom" style={{ fontWeight: 500, color: '#111827' }}>
-                  📱 Imagem para Celulares / Mobile (Opcional - Recomendado: 1:1 ou 4:5)
+                  📱 Imagem para Celulares / Mobile (Opcional - Proporção 2:1 ou 16:9)
                 </label>
                 <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.35rem' }}>
                   <input
@@ -2523,11 +2753,11 @@ export function CarrosselVitrinePage({ onBack, onNavigateToStore }: CarrosselVit
                   </button>
                 </div>
                 <span style={{ fontSize: '0.72rem', color: '#6b7280', marginTop: '0.35rem', display: 'block' }}>
-                  💡 Em smartphones, esta imagem será carregada exclusivamente, proporcionando carregamento ultra rápido e visualização perfeita sem cortes horizontais.
+                  💡 Em smartphones, esta imagem será carregada exclusivamente, proporcionando carregamento ultra rápido e visualização perfeita sem cortes laterais.
                 </span>
 
                 {bannerImageUrlMobile && (
-                  <div style={{ marginTop: '0.5rem', width: '100px', height: '100px', backgroundColor: '#e5e7eb', overflow: 'hidden', border: '1px solid #d1d5db' }}>
+                  <div style={{ marginTop: '0.5rem', width: '160px', height: '80px', backgroundColor: '#e5e7eb', overflow: 'hidden', border: '1px solid #d1d5db' }}>
                     <img src={bannerImageUrlMobile} alt="Prévia Mobile" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                   </div>
                 )}

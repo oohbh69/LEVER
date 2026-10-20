@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { supabase } from '../lib/supabase'
 import { useCart, formatBRL } from '../context/CartContext'
 
 interface CheckoutPageProps {
@@ -35,7 +36,7 @@ interface PagamentoData {
 }
 
 export function CheckoutPage({ onBackToStore }: CheckoutPageProps) {
-  const { items, subtotal, hasFreeShipping, clearCart } = useCart()
+  const { items, subtotal, discountAmount, hasFreeShipping, clearCart } = useCart()
 
   // Etapa atual (Pílulas: identificacao -> endereco -> pagamento)
   const [currentStep, setCurrentStep] = useState<CheckoutStep>('identificacao')
@@ -75,7 +76,9 @@ export function CheckoutPage({ onBackToStore }: CheckoutPageProps) {
   const [cepError, setCepError] = useState<string | null>(null)
   const [validationError, setValidationError] = useState<string | null>(null)
   const [isOrderFinished, setIsOrderFinished] = useState(false)
+  const [isSubmitting, setIsSubmitting] = useState(false)
   const [generatedOrderNumber, setGeneratedOrderNumber] = useState('')
+  const [generatedPixCode, setGeneratedPixCode] = useState('')
   const [copiedPix, setCopiedPix] = useState(false)
 
   // Rolagem suave para o topo ao trocar de etapa
@@ -228,7 +231,7 @@ export function CheckoutPage({ onBackToStore }: CheckoutPageProps) {
   }
 
   // Conclusão do Pedido
-  const handleFinalizarCompra = (e: React.FormEvent) => {
+  const handleFinalizarCompra = async (e: React.FormEvent) => {
     e.preventDefault()
 
     if (pagamento.metodo === 'cartao') {
@@ -251,11 +254,143 @@ export function CheckoutPage({ onBackToStore }: CheckoutPageProps) {
       }
     }
 
+    if (items.length === 0) {
+      setValidationError('Seu carrinho está vazio.')
+      return
+    }
+
     setValidationError(null)
-    const randomOrder = `#LVR-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`
-    setGeneratedOrderNumber(randomOrder)
-    setIsOrderFinished(true)
-    clearCart()
+    setIsSubmitting(true)
+
+    const randomSuffix = Math.floor(1000 + Math.random() * 9000)
+    const randomOrder = `#LVR-${new Date().getFullYear()}-${randomSuffix}`
+    const shippingName =
+      endereco.freteTipo === 'express'
+        ? 'LEVER Sedex Expresso Prioritário'
+        : 'LEVER Standard Econômico'
+    
+    const isPix = pagamento.metodo === 'pix'
+    const pixCode = `00020126580014br.gov.bcb.pix0136leverglasses-checkout-demo-${randomSuffix}5204000053039865405802BR5913LEVER_GLASSES6009SAO_PAULO62070503***6304`
+
+    try {
+      // 1. Criar pedido principal no Supabase
+      const effectiveDiscount = discountAmount || 0
+      const finalAmount = Math.max(0, totalComFrete - effectiveDiscount)
+
+      const { data: orderData, error: orderErr } = await supabase
+        .from('orders')
+        .insert({
+          order_number: randomOrder,
+          customer_name: identificacao.nomeCompleto.trim(),
+          customer_email: identificacao.email.trim(),
+          customer_cpf: identificacao.cpf.trim(),
+          customer_phone: identificacao.telefone.trim(),
+          subtotal: Number(subtotal.toFixed(2)),
+          shipping_cost: Number(freteValor.toFixed(2)),
+          discount_amount: Number(effectiveDiscount.toFixed(2)),
+          total_amount: Number(finalAmount.toFixed(2)),
+          payment_status: isPix ? 'aguardando' : 'pago',
+          shipping_status: 'pendente',
+          shipping_method: shippingName,
+          shipping_cep: endereco.cep.trim(),
+          shipping_street: endereco.rua.trim(),
+          shipping_number: endereco.numero.trim(),
+          shipping_complement: endereco.complemento?.trim() || null,
+          shipping_neighborhood: endereco.bairro.trim(),
+          shipping_city: endereco.cidade.trim(),
+          shipping_state: endereco.uf.trim().toUpperCase(),
+          payment_method: pagamento.metodo,
+          notes: isPix
+            ? 'Aguardando compensação do pagamento via Pix.'
+            : 'Pagamento efetuado via Cartão de Crédito.',
+        })
+        .select()
+        .single()
+
+      if (orderErr || !orderData) {
+        throw new Error(orderErr?.message || 'Erro ao registrar o pedido no banco de dados.')
+      }
+
+      // 2. Inserir itens do pedido
+      const isValidUUID = (id: any) =>
+        typeof id === 'string' &&
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)
+
+      const itemsPayload = items.map((it) => ({
+        order_id: orderData.id,
+        product_id: isValidUUID(it.id) ? it.id : null,
+        product_sku: it.tag || `SKU-${String(it.id).slice(0, 8)}`,
+        product_name: it.name,
+        variant_info: it.variant || null,
+        quantity: it.quantity,
+        unit_price: Number(it.price.toFixed(2)),
+        total_price: Number((it.price * it.quantity).toFixed(2)),
+      }))
+
+      const { error: itemsErr } = await supabase.from('order_items').insert(itemsPayload)
+      if (itemsErr) {
+        console.warn('Erro ao inserir itens do pedido:', itemsErr)
+      }
+
+      // 3. Inserir pagamento
+      const paymentPayload: any = isPix
+        ? {
+            order_id: orderData.id,
+            method: 'pix',
+            amount: orderData.total_amount,
+            status: 'pendente',
+            gateway: 'mercadopago',
+            gateway_payment_id: `PIX-${randomSuffix}`,
+            pix_code: pixCode,
+            installments: 1,
+          }
+        : {
+            order_id: orderData.id,
+            method: 'cartao',
+            amount: orderData.total_amount,
+            status: 'aprovado',
+            gateway: 'mercadopago',
+            gateway_payment_id: `CARD-${randomSuffix}`,
+            card_brand: 'Mastercard / Visa',
+            card_last_four: pagamento.cartaoNumero.replace(/\D/g, '').slice(-4) || '9999',
+            installments: pagamento.cartaoParcelas || 1,
+          }
+
+      const { error: payErr } = await supabase.from('payments').insert(paymentPayload)
+      if (payErr) {
+        console.warn('Erro ao registrar pagamento:', payErr)
+      }
+
+      // 4. Inserir evento de rastreio inicial
+      const { error: trackErr } = await supabase.from('order_tracking_events').insert({
+        order_id: orderData.id,
+        status_title: isPix ? 'Pedido Realizado - Aguardando Pix' : 'Pagamento Aprovado',
+        description: isPix
+          ? 'Pedido criado no sistema. Aguardando compensação instantânea via Pix para despacho.'
+          : 'Transação aprovada com sucesso via Cartão de Crédito. Pedido enviado para preparação e embalagem.',
+        location: `${endereco.cidade}/${endereco.uf}`,
+      })
+      if (trackErr) {
+        console.warn('Erro ao registrar evento de rastreio:', trackErr)
+      }
+
+      // Notificar a aplicação em tempo real
+      window.dispatchEvent(
+        new CustomEvent('orders-updated', {
+          detail: { orderNumber: randomOrder, orderId: orderData.id },
+        })
+      )
+
+      setGeneratedOrderNumber(randomOrder)
+      setGeneratedPixCode(pixCode)
+      setIsOrderFinished(true)
+      clearCart()
+    } catch (err: any) {
+      console.error('Falha ao processar pedido:', err)
+      setValidationError(err.message || 'Erro ao processar o pedido. Tente novamente.')
+    } finally {
+      setIsSubmitting(false)
+    }
   }
 
   // Se o pedido foi concluído com sucesso
@@ -312,12 +447,15 @@ export function CheckoutPage({ onBackToStore }: CheckoutPageProps) {
                 Copie o código abaixo e cole no aplicativo do seu banco na opção <strong>Pix Copia e Cola</strong>.
               </p>
               <div className="pix-code-display">
-                00020126580014br.gov.bcb.pix0136leverglasses-checkout-demo-20265204000053039865405802BR5913LEVER_GLASSES6009SAO_PAULO62070503***6304
+                {generatedPixCode || '00020126580014br.gov.bcb.pix0136leverglasses-checkout-demo-20265204000053039865405802BR5913LEVER_GLASSES6009SAO_PAULO62070503***6304'}
               </div>
               <button
                 type="button"
                 className="pix-copy-action-btn"
                 onClick={() => {
+                  if (generatedPixCode) {
+                    navigator.clipboard?.writeText(generatedPixCode)
+                  }
                   setCopiedPix(true)
                   setTimeout(() => setCopiedPix(false), 2200)
                 }}
@@ -981,12 +1119,35 @@ export function CheckoutPage({ onBackToStore }: CheckoutPageProps) {
                     ← Voltar para Endereço
                   </button>
 
-                  <button type="submit" className="checkout-primary-action-btn">
-                    <span>FINALIZAR PEDIDO</span>
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                      <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
-                      <path d="M7 11V7a5 5 0 0 1 10 0v4" />
-                    </svg>
+                  <button
+                    type="submit"
+                    className="checkout-primary-action-btn"
+                    disabled={isSubmitting}
+                  >
+                    {isSubmitting ? (
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
+                        <svg
+                          width="18"
+                          height="18"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          style={{ animation: 'spin 1s linear infinite' }}
+                        >
+                          <circle cx="12" cy="12" r="10" strokeDasharray="32" strokeDashoffset="12" />
+                        </svg>
+                        <span>PROCESSANDO PEDIDO...</span>
+                      </span>
+                    ) : (
+                      <>
+                        <span>FINALIZAR PEDIDO</span>
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                          <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+                          <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+                        </svg>
+                      </>
+                    )}
                   </button>
                 </div>
               </form>

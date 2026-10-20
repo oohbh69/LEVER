@@ -309,6 +309,9 @@ export function ProdutoPage({
               <img
                 src={images[activeImage] || images[0]}
                 alt={currentTitle}
+                loading="eager"
+                fetchPriority="high"
+                decoding="async"
                 style={{
                   width: '100%',
                   height: '100%',
@@ -355,6 +358,10 @@ export function ProdutoPage({
                   <img
                     src={imgUrl}
                     alt={`Miniatura ${index + 1}`}
+                    loading="lazy"
+                    decoding="async"
+                    width="60"
+                    height="60"
                     style={{
                       width: '100%',
                       height: '100%',
@@ -707,6 +714,8 @@ export function ProdutoPage({
                 <img
                   src={images[0]}
                   alt={currentTitle}
+                  loading="lazy"
+                  decoding="async"
                   style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                 />
               ) : (
@@ -874,6 +883,8 @@ export function ProdutoPage({
                   <img
                     src={imgUrl}
                     alt=""
+                    loading="lazy"
+                    decoding="async"
                     style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                   />
                 </button>

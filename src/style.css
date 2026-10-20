@@ -240,21 +240,29 @@ body {
 
 @media (max-width: 768px) {
   .banner-active-container {
-    aspect-ratio: 16 / 10;
-    min-height: 220px;
+    aspect-ratio: 2 / 1;
+    min-height: auto;
+    max-height: 420px;
   }
 
   .banner-active-container.has-mobile-banner {
-    aspect-ratio: 4 / 5;
-    min-height: 320px;
-    max-height: 520px;
+    aspect-ratio: 2 / 1;
+    min-height: auto;
+    max-height: 420px;
   }
 }
 
 @media (max-width: 480px) {
+  .banner-active-container {
+    aspect-ratio: 2 / 1;
+    min-height: auto;
+    max-height: 280px;
+  }
+
   .banner-active-container.has-mobile-banner {
-    aspect-ratio: 1 / 1;
-    min-height: 300px;
+    aspect-ratio: 2 / 1;
+    min-height: auto;
+    max-height: 280px;
   }
 }
 

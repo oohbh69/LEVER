@@ -4,8 +4,17 @@ import { CriarProdutoPage, type NewProductData } from './CriarProduto'
 import { CriarFretePage } from './CriarFrete'
 import { CriarCupomPage } from './CriarCupom'
 import { CarrosselVitrinePage } from './CarrosselVitrine'
+import { DetalhesPedidoPage } from './DetalhesPedido'
 
-type TabType = 'dashboard' | 'pedidos' | 'produtos' | 'criar-produto' | 'frete' | 'cupom' | 'carrossel-vitrine'
+type TabType =
+  | 'dashboard'
+  | 'pedidos'
+  | 'detalhes-pedido'
+  | 'produtos'
+  | 'criar-produto'
+  | 'frete'
+  | 'cupom'
+  | 'carrossel-vitrine'
 
 interface OrderItem {
   id: string
@@ -13,10 +22,38 @@ interface OrderItem {
   date: string
   clientName: string
   clientEmail: string
+  clientCpf?: string
+  clientPhone?: string
   total: string
+  totalNumeric: number
+  subtotalNumeric: number
+  shippingCostNumeric: number
+  discountAmountNumeric: number
   products: string
   paymentStatus: 'aguardando' | 'pago' | 'cancelado'
   shippingStatus: 'pendente' | 'embalado' | 'enviado' | 'cancelado'
+  paymentMethod?: string
+  shippingMethod?: string
+  shippingAddress?: {
+    cep: string
+    street: string
+    number: string
+    complement?: string
+    neighborhood: string
+    city: string
+    state: string
+  }
+  trackingCode?: string
+  items?: Array<{
+    id: string
+    name: string
+    sku: string
+    variant?: string
+    quantity: number
+    unitPrice: number
+    totalPrice: number
+  }>
+  rawCreatedAt: string
 }
 
 interface ProductItem {
@@ -52,6 +89,11 @@ export function DashboardPage({
   const [orders, setOrders] = useState<OrderItem[]>(initialOrders)
   const [products, setProducts] = useState<ProductItem[]>(initialProducts)
   const [editingProductId, setEditingProductId] = useState<string | null>(null)
+  const [viewingOrderId, setViewingOrderId] = useState<string | null>(null)
+  const [trackingModalOrder, setTrackingModalOrder] = useState<OrderItem | null>(null)
+  const [trackingInput, setTrackingInput] = useState('')
+  const [isSavingTracking, setIsSavingTracking] = useState(false)
+  const [isLoadingOrders, setIsLoadingOrders] = useState(false)
 
   // Métricas dinâmicas calculadas a partir dos pedidos e produtos
   const pendingOrdersCount = orders.filter((o) => o.paymentStatus === 'aguardando').length
@@ -127,6 +169,124 @@ export function DashboardPage({
     }
   }, [])
 
+  // Carregar pedidos reais do Supabase
+  const loadOrders = async () => {
+    setIsLoadingOrders(true)
+    try {
+      const { data, error } = await supabase
+        .from('orders')
+        .select(`
+          *,
+          order_items(*),
+          payments(*)
+        `)
+        .order('created_at', { ascending: false })
+
+      if (error) {
+        console.error('Erro ao carregar pedidos do Supabase:', error)
+        return
+      }
+
+      if (data) {
+        const mapped: OrderItem[] = data.map((o: any) => {
+          const d = new Date(o.created_at)
+          const dateStr = d.toLocaleDateString('pt-BR', {
+            day: '2-digit',
+            month: '2-digit',
+            year: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+          })
+
+          let productsSummary = ''
+          if (o.order_items && o.order_items.length > 0) {
+            productsSummary = o.order_items
+              .map((it: any) => `${it.quantity}x ${it.product_name || it.product_sku}`)
+              .join(', ')
+          } else {
+            productsSummary = 'Nenhum item listado'
+          }
+
+          let pStatus: OrderItem['paymentStatus'] = 'aguardando'
+          if (o.payment_status === 'pago' || o.payment_status === 'aprovado') pStatus = 'pago'
+          else if (o.payment_status === 'cancelado') pStatus = 'cancelado'
+
+          let sStatus: OrderItem['shippingStatus'] = 'pendente'
+          if (o.shipping_status === 'embalado') sStatus = 'embalado'
+          else if (o.shipping_status === 'enviado') sStatus = 'enviado'
+          else if (o.shipping_status === 'cancelado') sStatus = 'cancelado'
+
+          return {
+            id: o.id,
+            number: o.order_number,
+            date: dateStr,
+            clientName: o.customer_name || 'Cliente',
+            clientEmail: o.customer_email || '',
+            clientCpf: o.customer_cpf,
+            clientPhone: o.customer_phone,
+            total: `R$ ${Number(o.total_amount || 0).toFixed(2).replace('.', ',')}`,
+            totalNumeric: Number(o.total_amount || 0),
+            subtotalNumeric: Number(o.subtotal || 0),
+            shippingCostNumeric: Number(o.shipping_cost || 0),
+            discountAmountNumeric: Number(o.discount_amount || 0),
+            products: productsSummary,
+            paymentStatus: pStatus,
+            shippingStatus: sStatus,
+            paymentMethod: o.payment_method || o.payments?.[0]?.method || 'pix',
+            shippingMethod: o.shipping_method || 'LEVER Standard Econômico',
+            shippingAddress: {
+              cep: o.shipping_cep || '',
+              street: o.shipping_street || '',
+              number: o.shipping_number || '',
+              complement: o.shipping_complement || '',
+              neighborhood: o.shipping_neighborhood || '',
+              city: o.shipping_city || '',
+              state: o.shipping_state || '',
+            },
+            trackingCode: o.tracking_code || '',
+            items: (o.order_items || []).map((it: any) => ({
+              id: it.id,
+              name: it.product_name,
+              sku: it.product_sku,
+              variant: it.variant_info,
+              quantity: it.quantity,
+              unitPrice: Number(it.unit_price),
+              totalPrice: Number(it.total_price),
+            })),
+            rawCreatedAt: o.created_at,
+          }
+        })
+        setOrders(mapped)
+      }
+    } catch (err) {
+      console.error('Falha geral ao carregar pedidos:', err)
+    } finally {
+      setIsLoadingOrders(false)
+    }
+  }
+
+  // Carregar pedidos e escutar atualizações em tempo real
+  useEffect(() => {
+    loadOrders()
+
+    const onOrdersUpdated = () => {
+      loadOrders()
+    }
+    window.addEventListener('orders-updated', onOrdersUpdated)
+
+    const channel = supabase
+      .channel('orders-live-sync')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => {
+        loadOrders()
+      })
+      .subscribe()
+
+    return () => {
+      window.removeEventListener('orders-updated', onOrdersUpdated)
+      supabase.removeChannel(channel)
+    }
+  }, [])
+
   const handleLogout = async () => {
     try {
       await supabase.auth.signOut()
@@ -164,26 +324,61 @@ export function DashboardPage({
     }, 3000)
   }
 
-  // Ações de Pedidos
-  const handleMarkAsPacked = (orderId: string) => {
+  // Ações de Pedidos com persistência no Supabase
+  const handleMarkAsPacked = async (orderId: string) => {
     setOrders((prev) =>
       prev.map((o) => (o.id === orderId ? { ...o, shippingStatus: 'embalado' } : o))
     )
     const order = orders.find((o) => o.id === orderId)
     showToast(`Pedido ${order?.number || ''} marcado como embalado.`)
     setOpenMenuOrderId(null)
+
+    try {
+      await supabase
+        .from('orders')
+        .update({ shipping_status: 'embalado', updated_at: new Date().toISOString() })
+        .eq('id', orderId)
+
+      await supabase.from('order_tracking_events').insert({
+        order_id: orderId,
+        status_title: 'Pedido Embalado',
+        description: 'Todos os itens foram cuidadosamente conferidos e embalados para despacho.',
+      })
+    } catch (err) {
+      console.error('Erro ao atualizar status para embalado:', err)
+    }
   }
 
-  const handleMarkAsPaid = (orderId: string) => {
+  const handleMarkAsPaid = async (orderId: string) => {
     setOrders((prev) =>
       prev.map((o) => (o.id === orderId ? { ...o, paymentStatus: 'pago' } : o))
     )
     const order = orders.find((o) => o.id === orderId)
     showToast(`Pedido ${order?.number || ''} marcado como pago.`)
     setOpenMenuOrderId(null)
+
+    try {
+      await supabase
+        .from('orders')
+        .update({ payment_status: 'pago', updated_at: new Date().toISOString() })
+        .eq('id', orderId)
+
+      await supabase
+        .from('payments')
+        .update({ status: 'aprovado', updated_at: new Date().toISOString() })
+        .eq('order_id', orderId)
+
+      await supabase.from('order_tracking_events').insert({
+        order_id: orderId,
+        status_title: 'Pagamento Confirmado',
+        description: 'Pagamento aprovado. O pedido entrou no fluxo de expedição.',
+      })
+    } catch (err) {
+      console.error('Erro ao marcar pedido como pago:', err)
+    }
   }
 
-  const handleCancelOrder = (orderId: string) => {
+  const handleCancelOrder = async (orderId: string) => {
     setOrders((prev) =>
       prev.map((o) =>
         o.id === orderId
@@ -194,15 +389,77 @@ export function DashboardPage({
     const order = orders.find((o) => o.id === orderId)
     showToast(`Pedido ${order?.number || ''} cancelado.`)
     setOpenMenuOrderId(null)
+
+    try {
+      await supabase
+        .from('orders')
+        .update({
+          payment_status: 'cancelado',
+          shipping_status: 'cancelado',
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', orderId)
+
+      await supabase.from('order_tracking_events').insert({
+        order_id: orderId,
+        status_title: 'Pedido Cancelado',
+        description: 'Pedido foi cancelado pela administração da loja.',
+      })
+    } catch (err) {
+      console.error('Erro ao cancelar pedido:', err)
+    }
   }
 
-  const handleNotifyShipping = (orderId: string) => {
-    setOrders((prev) =>
-      prev.map((o) => (o.id === orderId ? { ...o, shippingStatus: 'enviado' } : o))
+  const handleOpenTrackingModal = (order: OrderItem) => {
+    setTrackingModalOrder(order)
+    setTrackingInput(
+      order.trackingCode ||
+        `BR${order.number.replace(/\D/g, '')}${Math.floor(1000 + Math.random() * 9000)}BR`
     )
-    const order = orders.find((o) => o.id === orderId)
-    showToast(`Notificação de envio disparada para ${order?.clientName || 'o cliente'}.`)
     setOpenMenuOrderId(null)
+  }
+
+  const handleSaveTrackingAndNotify = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!trackingModalOrder) return
+    const orderId = trackingModalOrder.id
+    const code = trackingInput.trim().toUpperCase()
+
+    setIsSavingTracking(true)
+    try {
+      await supabase
+        .from('orders')
+        .update({
+          shipping_status: 'enviado',
+          tracking_code: code,
+          shipped_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', orderId)
+
+      await supabase.from('order_tracking_events').insert({
+        order_id: orderId,
+        status_title: 'Objeto Postado / Em Trânsito',
+        description: `Encomenda despachada pela transportadora com código de rastreamento: ${code}`,
+        location: trackingModalOrder.shippingAddress?.city
+          ? `${trackingModalOrder.shippingAddress.city}/${trackingModalOrder.shippingAddress.state}`
+          : 'Centro de Distribuição LEVER',
+      })
+
+      setOrders((prev) =>
+        prev.map((o) =>
+          o.id === orderId ? { ...o, shippingStatus: 'enviado', trackingCode: code } : o
+        )
+      )
+
+      showToast(`Código ${code} salvo e envio notificado com sucesso!`)
+      setTrackingModalOrder(null)
+    } catch (err) {
+      console.error('Erro ao salvar código de rastreamento:', err)
+      showToast('Erro ao salvar código de rastreamento.')
+    } finally {
+      setIsSavingTracking(false)
+    }
   }
 
   // Ações de Produtos
@@ -835,7 +1092,21 @@ export function DashboardPage({
                     </tr>
                   </thead>
                   <tbody>
-                    {orders.length === 0 ? (
+                    {isLoadingOrders ? (
+                      <tr>
+                        <td
+                          colSpan={8}
+                          style={{
+                            textAlign: 'center',
+                            padding: '3rem 1rem',
+                            color: '#6b7280',
+                            fontWeight: 400,
+                          }}
+                        >
+                          Carregando pedidos do Supabase...
+                        </td>
+                      </tr>
+                    ) : orders.length === 0 ? (
                       <tr>
                         <td
                           colSpan={8}
@@ -856,22 +1127,54 @@ export function DashboardPage({
 
                       return (
                         <tr key={order.id} style={{ position: 'relative', zIndex: isMenuOpen ? 50 : 1 }}>
-                          <td>{order.number}</td>
+                          <td>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setViewingOrderId(order.id)
+                                setActiveTab('detalhes-pedido')
+                              }}
+                              style={{
+                                background: 'none',
+                                border: 'none',
+                                padding: 0,
+                                color: '#000000',
+                                fontWeight: 600,
+                                textDecoration: 'underline',
+                                textUnderlineOffset: '3px',
+                                cursor: 'pointer',
+                                fontFamily: 'inherit',
+                                fontSize: '0.84rem',
+                              }}
+                              title="Clique para abrir a página completa do pedido"
+                            >
+                              {order.number}
+                            </button>
+                          </td>
                           <td>{order.date}</td>
                           <td>
                             <div>
-                              <div>{order.clientName}</div>
+                              <div style={{ fontWeight: 500 }}>{order.clientName}</div>
                               <div style={{ fontSize: '0.74rem', color: '#6b7280' }}>
                                 {order.clientEmail}
                               </div>
                             </div>
                           </td>
-                          <td>{order.total}</td>
+                          <td style={{ fontWeight: 600 }}>{order.total}</td>
                           <td style={{ maxWidth: '280px', whiteSpace: 'normal', lineHeight: '1.4' }}>
                             {order.products}
                           </td>
                           <td>{renderPaymentBadge(order.paymentStatus)}</td>
-                          <td>{renderShippingBadge(order.shippingStatus)}</td>
+                          <td>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                              {renderShippingBadge(order.shippingStatus)}
+                              {order.trackingCode && (
+                                <span style={{ fontSize: '0.7rem', color: '#4b5563', fontFamily: 'monospace' }}>
+                                  {order.trackingCode}
+                                </span>
+                              )}
+                            </div>
+                          </td>
                           <td style={{ textAlign: 'right' }}>
                             <div className="order-action-container" style={{ zIndex: isMenuOpen ? 100 : 'auto' }}>
                               <button
@@ -907,6 +1210,31 @@ export function DashboardPage({
                                   <button
                                     type="button"
                                     className="order-action-item"
+                                    onClick={() => {
+                                      setViewingOrderId(order.id)
+                                      setActiveTab('detalhes-pedido')
+                                      setOpenMenuOrderId(null)
+                                    }}
+                                  >
+                                    <svg
+                                      width="14"
+                                      height="14"
+                                      viewBox="0 0 24 24"
+                                      fill="none"
+                                      stroke="currentColor"
+                                      strokeWidth="2"
+                                      strokeLinecap="round"
+                                      strokeLinejoin="round"
+                                    >
+                                      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                                      <circle cx="12" cy="12" r="3" />
+                                    </svg>
+                                    ver pedido completo
+                                  </button>
+
+                                  <button
+                                    type="button"
+                                    className="order-action-item"
                                     onClick={() => handleMarkAsPacked(order.id)}
                                   >
                                     <svg
@@ -918,7 +1246,7 @@ export function DashboardPage({
                                       strokeWidth="2"
                                       strokeLinecap="round"
                                       strokeLinejoin="round"
-                                >
+                                    >
                                       <line x1="16.5" y1="9.4" x2="7.5" y2="4.21" />
                                       <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
                                       <polyline points="3.27 6.96 12 12.01 20.73 6.96" />
@@ -950,7 +1278,7 @@ export function DashboardPage({
                                   <button
                                     type="button"
                                     className="order-action-item"
-                                    onClick={() => handleNotifyShipping(order.id)}
+                                    onClick={() => handleOpenTrackingModal(order)}
                                   >
                                     <svg
                                       width="14"
@@ -965,7 +1293,7 @@ export function DashboardPage({
                                       <line x1="22" y1="2" x2="11" y2="13" />
                                       <polygon points="22 2 15 22 11 13 2 9 22 2" />
                                     </svg>
-                                    notificar envio
+                                    informar rastreio
                                   </button>
 
                                   <button
@@ -1486,7 +1814,130 @@ export function DashboardPage({
             onNavigateToStore={onNavigateToStore}
           />
         )}
+
+        {/* TAB 8: PÁGINA COMPLETA DE DETALHES DO PEDIDO */}
+        {activeTab === 'detalhes-pedido' && viewingOrderId && (
+          <DetalhesPedidoPage
+            orderId={viewingOrderId}
+            onBack={() => {
+              setViewingOrderId(null)
+              setActiveTab('pedidos')
+              loadOrders()
+            }}
+            onNavigateToTracking={() => {
+              window.location.hash = 'rastreio'
+            }}
+          />
+        )}
       </main>
+
+      {/* Modal: Atualizar Código de Rastreamento */}
+      {trackingModalOrder && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.65)',
+            backdropFilter: 'blur(3px)',
+            zIndex: 10000,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '1rem',
+          }}
+          onClick={() => setTrackingModalOrder(null)}
+        >
+          <div
+            style={{
+              backgroundColor: '#ffffff',
+              width: '100%',
+              maxWidth: '460px',
+              padding: '1.75rem',
+              border: '1px solid #111111',
+              boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 style={{ margin: '0 0 0.5rem 0', fontSize: '1.15rem', fontWeight: 700 }}>
+              Informar Código de Rastreio
+            </h3>
+            <p style={{ margin: '0 0 1.25rem 0', fontSize: '0.84rem', color: '#6b7280' }}>
+              Pedido <strong>{trackingModalOrder.number}</strong> ({trackingModalOrder.clientName})
+            </p>
+
+            <form onSubmit={handleSaveTrackingAndNotify}>
+              <div style={{ marginBottom: '1.25rem' }}>
+                <label
+                  htmlFor="modalTrackingCode"
+                  style={{
+                    display: 'block',
+                    fontSize: '0.78rem',
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.04em',
+                    fontWeight: 600,
+                    marginBottom: '0.4rem',
+                  }}
+                >
+                  Código de Rastreio (Correios / Transportadora):
+                </label>
+                <input
+                  id="modalTrackingCode"
+                  type="text"
+                  required
+                  value={trackingInput}
+                  onChange={(e) => setTrackingInput(e.target.value.toUpperCase())}
+                  placeholder="Ex: BR123456789BR"
+                  style={{
+                    width: '100%',
+                    padding: '0.65rem 0.75rem',
+                    fontSize: '0.9rem',
+                    fontFamily: 'monospace',
+                    fontWeight: 600,
+                    border: '1px solid #111111',
+                    borderRadius: 0,
+                    outline: 'none',
+                    boxSizing: 'border-box',
+                  }}
+                />
+                <span style={{ fontSize: '0.74rem', color: '#6b7280', display: 'block', marginTop: '0.35rem' }}>
+                  Ao salvar, o status do pedido mudará para <strong>ENVIADO</strong> e o cliente poderá rastrear.
+                </span>
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.6rem' }}>
+                <button
+                  type="button"
+                  onClick={() => setTrackingModalOrder(null)}
+                  style={{
+                    backgroundColor: '#ffffff',
+                    border: '1px solid #d1d5db',
+                    padding: '0.55rem 0.9rem',
+                    fontSize: '0.8rem',
+                    cursor: 'pointer',
+                  }}
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSavingTracking}
+                  style={{
+                    backgroundColor: '#000000',
+                    color: '#ffffff',
+                    border: 'none',
+                    padding: '0.55rem 1.1rem',
+                    fontSize: '0.8rem',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                  }}
+                >
+                  {isSavingTracking ? 'Salvando...' : 'Salvar e Notificar Envio'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* Toast Notification */}
       {toastMessage && (

@@ -608,9 +608,18 @@ export function CriarProdutoPage({ onBack, onSave, editProductId }: CriarProduto
         const isVideo = file.type.startsWith('video/')
         const folder = isVideo ? 'products/videos' : 'products/images'
 
-        const res = await uploadFileToR2(file, folder as 'products', (p) => {
-          setUploadProgress(Math.round(((i + p / 100) / fileList.length) * 100))
-        })
+        const res = await uploadFileToR2(
+          file,
+          folder as 'products',
+          (p) => {
+            setUploadProgress(Math.round(((i + p / 100) / fileList.length) * 100))
+          },
+          {
+            maxWidth: 1200,
+            maxHeight: 1200,
+            quality: 0.82,
+          }
+        )
 
         if (isVideo) {
           setVideos((prev) => [...prev, res.url])
