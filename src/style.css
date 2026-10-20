@@ -4879,15 +4879,26 @@ body {
 }
 
 .summary-item-thumb {
-  width: 44px;
-  height: 44px;
+  width: 46px;
+  height: 46px;
   background-color: #f3f4f6;
+  border-radius: 4px;
+  border: 1px solid #e5e7eb;
   display: flex;
   align-items: center;
   justify-content: center;
   color: #9ca3af;
   position: relative;
   flex-shrink: 0;
+  overflow: visible;
+}
+
+.summary-item-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 3px;
+  display: block;
 }
 
 .summary-item-badge {
@@ -5543,13 +5554,16 @@ body {
 }
 
 .dashboard-topbar {
-  height: 64px;
+  min-height: 64px;
+  height: auto;
   background-color: #ffffff;
   border-bottom: 1px solid #e5e7eb;
-  padding: 0 2rem;
+  padding: 0.75rem 2rem;
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
 }
 
 .dashboard-page-title {
@@ -5570,7 +5584,7 @@ body {
 
 .dashboard-cards-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
   gap: 1.25rem;
 }
 
@@ -8024,14 +8038,132 @@ body {
   }
 }
 
+/* ========================================================
+   FILTRO DE DATA (DASHBOARD & PEDIDOS)
+   ======================================================== */
+.dashboard-date-filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  flex-wrap: wrap;
+}
 
+.date-filter-presets {
+  display: inline-flex;
+  align-items: center;
+  background-color: #f3f4f6;
+  padding: 3px;
+  border-radius: 8px;
+  gap: 2px;
+}
 
+.date-preset-btn {
+  background: transparent;
+  border: none;
+  font-family: inherit;
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: #4b5563;
+  padding: 0.35rem 0.75rem;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease-in-out;
+  white-space: nowrap;
+}
 
+.date-preset-btn:hover {
+  color: #111827;
+  background-color: rgba(255, 255, 255, 0.6);
+}
 
+.date-preset-btn.active {
+  background-color: #000000;
+  color: #ffffff;
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
 
+.date-custom-inputs {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  background-color: #ffffff;
+  border: 1px solid #e5e7eb;
+  padding: 0.25rem 0.5rem;
+  border-radius: 8px;
+}
 
+.date-input-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.75rem;
+  color: #6b7280;
+  font-weight: 500;
+}
 
+.date-input-wrap input[type="date"] {
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.78rem;
+  font-family: inherit;
+  color: #111827;
+  background-color: #ffffff;
+  outline: none;
+  transition: border-color 0.15s ease;
+}
 
+.date-input-wrap input[type="date"]:focus {
+  border-color: #000000;
+}
 
+.date-clear-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  background-color: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 0.35rem 0.65rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: #4b5563;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
 
+.date-clear-btn:hover {
+  background-color: #fef2f2;
+  border-color: #fecaca;
+  color: #b91c1c;
+}
 
+.date-filter-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.2rem 0.55rem;
+  border-radius: 12px;
+  background-color: #f3f4f6;
+  font-size: 0.74rem;
+  color: #4b5563;
+  font-weight: 500;
+}
+
+@media (max-width: 900px) {
+  .dashboard-topbar {
+    padding: 0.85rem 1rem;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.75rem;
+  }
+
+  .dashboard-date-filter-bar {
+    width: 100%;
+    justify-content: flex-start;
+    overflow-x: auto;
+    padding-bottom: 2px;
+  }
+}

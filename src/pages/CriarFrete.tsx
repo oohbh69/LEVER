@@ -1,4 +1,5 @@
-import { useState, type ChangeEvent } from 'react'
+import { useState, useEffect, type ChangeEvent } from 'react'
+import { supabase } from '../lib/supabase'
 
 export interface CustomShippingRate {
   id: string
@@ -62,6 +63,8 @@ interface CriarFretePageProps {
 
 export function CriarFretePage({ onBack }: CriarFretePageProps) {
   const [shippingRates, setShippingRates] = useState<CustomShippingRate[]>(initialShippingRates)
+  const [isLoading, setIsLoading] = useState(true)
+  const [editingRateId, setEditingRateId] = useState<string | null>(null)
 
   // Formulário de Criar Frete Personalizado
   const [shippingName, setShippingName] = useState('')
@@ -83,6 +86,84 @@ export function CriarFretePage({ onBack }: CriarFretePageProps) {
       setToastMessage((current) => (current === msg ? null : current))
     }, 3000)
   }
+
+  // Carregar regras de frete do Supabase
+  const loadShippingRates = async () => {
+    setIsLoading(true)
+    try {
+      const { data, error } = await supabase
+        .from('shipping_rates')
+        .select(`
+          id,
+          name,
+          price,
+          is_free,
+          delivery_time,
+          min_order_value,
+          status,
+          created_at,
+          shipping_rate_states (
+            state_uf
+          )
+        `)
+        .order('created_at', { ascending: false })
+
+      if (error) {
+        console.error('Erro ao buscar taxas de frete no Supabase:', error)
+        const cached = localStorage.getItem('lever_custom_shipping_rates')
+        if (cached) {
+          try {
+            setShippingRates(JSON.parse(cached))
+          } catch (_) {}
+        }
+      } else if (data) {
+        const formatted: CustomShippingRate[] = data.map((row: any) => {
+          const numPrice = Number(row.price) || 0
+          const states = (row.shipping_rate_states || []).map((s: any) => s.state_uf)
+          const numMin =
+            row.min_order_value !== null && row.min_order_value !== undefined
+              ? Number(row.min_order_value)
+              : undefined
+
+          return {
+            id: row.id,
+            name: row.name,
+            price: row.is_free
+              ? 'R$ 0,00'
+              : `R$ ${numPrice.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+            priceNumeric: numPrice,
+            isFree: Boolean(row.is_free),
+            deliveryTime: row.delivery_time || '2 a 5 dias úteis',
+            selectedStates: states,
+            minOrderValue:
+              numMin !== undefined
+                ? `R$ ${numMin.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                : undefined,
+            status: row.status as 'ativo' | 'inativo',
+            createdAt: new Date(row.created_at).getTime(),
+          }
+        })
+        setShippingRates(formatted)
+        try {
+          localStorage.setItem('lever_custom_shipping_rates', JSON.stringify(formatted))
+        } catch (_) {}
+      }
+    } catch (err) {
+      console.error('Erro de conexão ao carregar fretes:', err)
+      const cached = localStorage.getItem('lever_custom_shipping_rates')
+      if (cached) {
+        try {
+          setShippingRates(JSON.parse(cached))
+        } catch (_) {}
+      }
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    loadShippingRates()
+  }, [])
 
   // Formatação de Moeda
   const parseCurrencyInput = (val: string) => {
@@ -151,29 +232,106 @@ export function CriarFretePage({ onBack }: CriarFretePageProps) {
     })
   }
 
-  // Ações da lista
-  const handleDeleteRate = (id: string) => {
+  // Iniciar e cancelar edição
+  const handleEditRate = (rate: CustomShippingRate) => {
+    setEditingRateId(rate.id)
+    setShippingName(rate.name)
+    setPrice(rate.isFree ? 'R$ 0,00' : rate.price)
+    setIsFree(rate.isFree)
+    setDeliveryTime(rate.deliveryTime)
+    setSelectedStates([...rate.selectedStates])
+    setMinOrderValue(rate.minOrderValue || '')
+    setStatus(rate.status)
+    setErrors({})
+    window.scrollTo({ top: 120, behavior: 'smooth' })
+  }
+
+  const handleCancelEdit = () => {
+    setEditingRateId(null)
+    setShippingName('')
+    setPrice('R$ 15,00')
+    setIsFree(false)
+    setDeliveryTime('2 a 5 dias úteis')
+    setSelectedStates(['SP', 'RJ', 'MG', 'ES'])
+    setMinOrderValue('')
+    setStatus('ativo')
+    setErrors({})
+  }
+
+  // Ações da lista: Excluir
+  const handleDeleteRate = async (id: string) => {
     const rate = shippingRates.find((r) => r.id === id)
-    setShippingRates((prev) => prev.filter((r) => r.id !== id))
-    showToast(`Modalidade "${rate?.name || ''}" removida com sucesso.`)
+    if (!rate) return
+
+    if (!window.confirm(`Tem certeza que deseja excluir o frete "${rate.name}"?`)) {
+      return
+    }
+
+    try {
+      const { error } = await supabase.from('shipping_rates').delete().eq('id', id)
+      if (error) {
+        console.error('Erro ao excluir frete do banco:', error)
+        showToast(`Erro ao excluir: ${error.message}`)
+        return
+      }
+
+      const updated = shippingRates.filter((r) => r.id !== id)
+      setShippingRates(updated)
+      try {
+        localStorage.setItem('lever_custom_shipping_rates', JSON.stringify(updated))
+      } catch (_) {}
+
+      showToast(`Modalidade "${rate.name}" removida com sucesso.`)
+      if (editingRateId === id) {
+        handleCancelEdit()
+      }
+    } catch (err: any) {
+      showToast(`Erro ao excluir: ${err.message || 'Falha de conexão'}`)
+    }
   }
 
-  const handleToggleStatus = (id: string) => {
-    let nowActive = false
+  // Ações da lista: Ativar / Pausar
+  const handleToggleStatus = async (id: string) => {
+    const rate = shippingRates.find((r) => r.id === id)
+    if (!rate) return
+    const nextStatus = rate.status === 'ativo' ? 'inativo' : 'ativo'
+
+    // Atualização otimista
     setShippingRates((prev) =>
-      prev.map((r) => {
-        if (r.id === id) {
-          nowActive = r.status !== 'ativo'
-          return { ...r, status: nowActive ? 'ativo' : 'inativo' }
-        }
-        return r
-      })
+      prev.map((r) => (r.id === id ? { ...r, status: nextStatus } : r))
     )
-    showToast(`Modalidade ${nowActive ? 'ativada' : 'desativada'} na loja.`)
+
+    try {
+      const { error } = await supabase
+        .from('shipping_rates')
+        .update({ status: nextStatus, updated_at: new Date().toISOString() })
+        .eq('id', id)
+
+      if (error) {
+        // Reverter se falhar
+        setShippingRates((prev) =>
+          prev.map((r) => (r.id === id ? { ...r, status: rate.status } : r))
+        )
+        showToast(`Erro ao atualizar status: ${error.message}`)
+      } else {
+        try {
+          const updated = shippingRates.map((r) =>
+            r.id === id ? { ...r, status: nextStatus } : r
+          )
+          localStorage.setItem('lever_custom_shipping_rates', JSON.stringify(updated))
+        } catch (_) {}
+        showToast(`Modalidade "${rate.name}" ${nextStatus === 'ativo' ? 'ativada' : 'desativada'} na loja.`)
+      }
+    } catch (err: any) {
+      setShippingRates((prev) =>
+        prev.map((r) => (r.id === id ? { ...r, status: rate.status } : r))
+      )
+      showToast(`Erro: ${err.message || 'Falha de conexão'}`)
+    }
   }
 
-  // Salvar novo frete
-  const handleSaveRate = () => {
+  // Salvar novo frete ou atualizar existente
+  const handleSaveRate = async () => {
     const validationErrors: { name?: string; price?: string; states?: string } = {}
     if (!shippingName.trim()) {
       validationErrors.name = 'Informe o nome do frete'
@@ -192,32 +350,104 @@ export function CriarFretePage({ onBack }: CriarFretePageProps) {
     }
 
     setIsSaving(true)
+    const numericPrice = isFree ? 0 : parseToNumber(price)
+    const parsedMinOrder = minOrderValue.trim() ? parseToNumber(minOrderValue) : null
 
-    const newRate: CustomShippingRate = {
-      id: String(Date.now()),
-      name: shippingName.trim(),
-      price: isFree ? 'R$ 0,00' : price.trim(),
-      priceNumeric: isFree ? 0 : parseToNumber(price),
-      isFree,
-      deliveryTime: deliveryTime.trim() || '2 a 5 dias úteis',
-      selectedStates: [...selectedStates],
-      minOrderValue: minOrderValue.trim() || undefined,
-      status,
-      createdAt: Date.now(),
-    }
+    try {
+      if (editingRateId) {
+        // 1. Atualizar taxa existente no Supabase
+        const { error: updateErr } = await supabase
+          .from('shipping_rates')
+          .update({
+            name: shippingName.trim(),
+            price: numericPrice,
+            is_free: isFree,
+            delivery_time: deliveryTime.trim() || '2 a 5 dias úteis',
+            min_order_value: parsedMinOrder,
+            status,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', editingRateId)
 
-    setTimeout(() => {
-      setShippingRates((prev) => [newRate, ...prev])
-      showToast(`Frete personalizado "${newRate.name}" criado com sucesso!`)
-      setIsSaving(false)
-      // Resetar form
+        if (updateErr) {
+          throw updateErr
+        }
+
+        // 2. Deletar estados anteriores e reinserir
+        await supabase
+          .from('shipping_rate_states')
+          .delete()
+          .eq('shipping_rate_id', editingRateId)
+
+        if (selectedStates.length > 0) {
+          const statesPayload = selectedStates.map((uf) => ({
+            shipping_rate_id: editingRateId,
+            state_uf: uf,
+          }))
+          const { error: statesErr } = await supabase
+            .from('shipping_rate_states')
+            .insert(statesPayload)
+          if (statesErr) {
+            console.error('Erro ao atualizar estados atendidos:', statesErr)
+          }
+        }
+
+        showToast(`Frete "${shippingName.trim()}" atualizado com sucesso!`)
+        setEditingRateId(null)
+      } else {
+        // Inserir nova taxa no Supabase
+        const { data: newRateData, error: insertErr } = await supabase
+          .from('shipping_rates')
+          .insert({
+            name: shippingName.trim(),
+            price: numericPrice,
+            is_free: isFree,
+            delivery_time: deliveryTime.trim() || '2 a 5 dias úteis',
+            min_order_value: parsedMinOrder,
+            status,
+          })
+          .select()
+          .single()
+
+        if (insertErr || !newRateData) {
+          throw insertErr || new Error('Falha ao cadastrar frete no banco.')
+        }
+
+        // Inserir estados atendidos
+        if (selectedStates.length > 0) {
+          const statesPayload = selectedStates.map((uf) => ({
+            shipping_rate_id: newRateData.id,
+            state_uf: uf,
+          }))
+          const { error: statesErr } = await supabase
+            .from('shipping_rate_states')
+            .insert(statesPayload)
+          if (statesErr) {
+            console.error('Erro ao associar estados do frete:', statesErr)
+          }
+        }
+
+        showToast(`Frete personalizado "${shippingName.trim()}" salvo com sucesso!`)
+      }
+
+      // Recarregar lista atualizada diretamente do banco de dados
+      await loadShippingRates()
+
+      // Resetar formulário
       setShippingName('')
       setPrice('R$ 15,00')
       setIsFree(false)
+      setDeliveryTime('2 a 5 dias úteis')
       setSelectedStates(['SP', 'RJ', 'MG', 'ES'])
       setMinOrderValue('')
+      setStatus('ativo')
       setErrors({})
-    }, 300)
+    } catch (err: any) {
+      console.error('Erro ao salvar frete no Supabase:', err)
+      showToast(`Erro ao salvar frete: ${err.message || 'Verifique sua conexão.'}`)
+    } finally {
+      setIsSaving(false)
+    }
   }
 
   return (
@@ -257,6 +487,28 @@ export function CriarFretePage({ onBack }: CriarFretePageProps) {
         </div>
 
         <div className="product-create-topbar-right">
+          {editingRateId && (
+            <button
+              type="button"
+              onClick={handleCancelEdit}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.4rem',
+                fontSize: '0.82rem',
+                color: '#4b5563',
+                backgroundColor: '#ffffff',
+                border: '1px solid #d1d5db',
+                padding: '0.5rem 0.85rem',
+                borderRadius: '6px',
+                cursor: 'pointer',
+                fontWeight: 500,
+              }}
+            >
+              Cancelar edição
+            </button>
+          )}
+
           <button
             type="button"
             className="product-create-save-btn"
@@ -301,7 +553,7 @@ export function CriarFretePage({ onBack }: CriarFretePageProps) {
                 >
                   <polyline points="20 6 9 17 4 12" />
                 </svg>
-                Salvar frete personalizado
+                {editingRateId ? 'Salvar alterações' : 'Salvar frete personalizado'}
               </>
             )}
           </button>
@@ -318,14 +570,18 @@ export function CriarFretePage({ onBack }: CriarFretePageProps) {
               <div className="product-card-header">
                 <div className="header-title-row">
                   <div>
-                    <h2 className="product-card-title">Criar frete personalizado</h2>
+                    <h2 className="product-card-title">
+                      {editingRateId ? `Editando: ${shippingName || 'Frete'}` : 'Criar frete personalizado'}
+                    </h2>
                     <span className="product-card-desc">
-                      Configure modalidades próprias com valor fixo e regras por estado
+                      {editingRateId
+                        ? 'Altere os valores, estados atendidos e regras da modalidade selecionada'
+                        : 'Configure modalidades próprias com valor fixo e regras por estado'}
                     </span>
                   </div>
                   <span className="product-create-status-badge">
                     <span className="status-dot status-online" />
-                    Regra ativa
+                    {status === 'ativo' ? 'Regra ativa' : 'Regra pausada'}
                   </span>
                 </div>
               </div>
@@ -581,7 +837,42 @@ export function CriarFretePage({ onBack }: CriarFretePageProps) {
                     </tr>
                   </thead>
                   <tbody>
-                    {shippingRates.length === 0 ? (
+                    {isLoading ? (
+                      <tr>
+                        <td
+                          colSpan={6}
+                          style={{
+                            textAlign: 'center',
+                            padding: '3rem 1rem',
+                            color: '#6b7280',
+                          }}
+                        >
+                          <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.6rem' }}>
+                            <svg
+                              className="spin-icon"
+                              width="18"
+                              height="18"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="2"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                            >
+                              <line x1="12" y1="2" x2="12" y2="6" />
+                              <line x1="12" y1="18" x2="12" y2="22" />
+                              <line x1="4.93" y1="4.93" x2="7.76" y2="7.76" />
+                              <line x1="16.24" y1="16.24" x2="19.07" y2="19.07" />
+                              <line x1="2" y1="12" x2="6" y2="12" />
+                              <line x1="18" y1="12" x2="22" y2="12" />
+                              <line x1="4.93" y1="19.07" x2="7.76" y2="16.24" />
+                              <line x1="16.24" y1="7.76" x2="19.07" y2="4.93" />
+                            </svg>
+                            <span>Carregando modalidades do banco de dados...</span>
+                          </div>
+                        </td>
+                      </tr>
+                    ) : shippingRates.length === 0 ? (
                       <tr>
                         <td
                           colSpan={6}
@@ -598,13 +889,14 @@ export function CriarFretePage({ onBack }: CriarFretePageProps) {
                       shippingRates.map((rate) => (
                         <tr key={rate.id}>
                           <td>
-                            <span style={{ color: '#111111' }}>{rate.name}</span>
+                            <span style={{ color: '#111111', fontWeight: 500 }}>{rate.name}</span>
                             {rate.minOrderValue && (
                               <div
                                 style={{
                                   fontSize: '0.72rem',
                                   color: '#15803d',
                                   marginTop: '0.15rem',
+                                  fontWeight: 500,
                                 }}
                               >
                                 Grátis acima de {rate.minOrderValue}
@@ -612,7 +904,7 @@ export function CriarFretePage({ onBack }: CriarFretePageProps) {
                             )}
                           </td>
                           <td>
-                            <span style={{ color: rate.isFree ? '#15803d' : '#111111' }}>
+                            <span style={{ color: rate.isFree ? '#15803d' : '#111111', fontWeight: 600 }}>
                               {rate.isFree ? 'Grátis' : rate.price}
                             </span>
                           </td>
@@ -659,9 +951,17 @@ export function CriarFretePage({ onBack }: CriarFretePageProps) {
                               style={{
                                 display: 'inline-flex',
                                 alignItems: 'center',
-                                gap: '0.5rem',
+                                gap: '0.4rem',
                               }}
                             >
+                              <button
+                                type="button"
+                                className="order-action-btn"
+                                style={{ padding: '0.3rem 0.6rem', fontSize: '0.74rem' }}
+                                onClick={() => handleEditRate(rate)}
+                              >
+                                Editar
+                              </button>
                               <button
                                 type="button"
                                 className="order-action-btn"

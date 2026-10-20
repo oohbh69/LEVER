@@ -18,6 +18,7 @@ import {
   fetchVitrineConfigFromSupabase,
   type VitrineConfig,
 } from './pages/CarrosselVitrine'
+import { recordStoreVisit } from './utils/visitsTracker'
 
 type PageRoute =
   | 'home'
@@ -345,6 +346,21 @@ function AppContent() {
     }
     document.title = routeTitles[currentPage] || 'LEVER'
   }, [currentPage, selectedProductName])
+
+  // Registrar visita na loja para rotas públicas (desconsiderando painel/admin)
+  useEffect(() => {
+    const adminRoutes = [
+      'painel',
+      'dashboard',
+      'criar-produto',
+      'frete',
+      'cupom',
+      'carrossel-vitrine',
+    ]
+    if (!adminRoutes.includes(currentPage)) {
+      recordStoreVisit(`/${currentPage === 'home' ? '' : currentPage}`)
+    }
+  }, [currentPage])
 
   const navigateTo = (page: PageRoute, prodId?: string) => {
     if (page === 'home') {

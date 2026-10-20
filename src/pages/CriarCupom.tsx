@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
+import { supabase } from '../lib/supabase'
 
 export interface CouponItem {
   id: string
@@ -25,6 +26,8 @@ interface CriarCupomPageProps {
 
 export function CriarCupomPage({ onBack }: CriarCupomPageProps) {
   const [coupons, setCoupons] = useState<CouponItem[]>(initialCoupons)
+  const [isLoading, setIsLoading] = useState(true)
+  const [editingCouponId, setEditingCouponId] = useState<string | null>(null)
 
   // Formulário de Criação
   const [code, setCode] = useState('')
@@ -52,6 +55,64 @@ export function CriarCupomPage({ onBack }: CriarCupomPageProps) {
     }, 3000)
   }
 
+  // Carregar cupons do Supabase
+  const loadCoupons = async () => {
+    setIsLoading(true)
+    try {
+      const { data, error } = await supabase
+        .from('coupons')
+        .select('*')
+        .order('created_at', { ascending: false })
+
+      if (error) {
+        console.error('Erro ao buscar cupons do Supabase:', error)
+        const cached = localStorage.getItem('lever_custom_coupons')
+        if (cached) {
+          try {
+            setCoupons(JSON.parse(cached))
+          } catch (_) {}
+        }
+      } else if (data) {
+        const formatted: CouponItem[] = data.map((row: any) => ({
+          id: row.id,
+          code: row.code,
+          description: row.description || undefined,
+          discountType: row.discount_type,
+          discountValue: Number(row.discount_value) || 0,
+          minOrderValue: row.min_order_value
+            ? `R$ ${Number(row.min_order_value).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+            : undefined,
+          usageLimit: row.usage_limit || undefined,
+          usedCount: Number(row.used_count) || 0,
+          oncePerCustomer: Boolean(row.once_per_customer),
+          hasExpiration: Boolean(row.has_expiration),
+          startDate: row.start_date ? row.start_date.slice(0, 10) : undefined,
+          endDate: row.end_date ? row.end_date.slice(0, 10) : undefined,
+          status: row.status,
+          createdAt: new Date(row.created_at).getTime(),
+        }))
+        setCoupons(formatted)
+        try {
+          localStorage.setItem('lever_custom_coupons', JSON.stringify(formatted))
+        } catch (_) {}
+      }
+    } catch (err) {
+      console.error('Erro ao conectar ao Supabase para cupons:', err)
+      const cached = localStorage.getItem('lever_custom_coupons')
+      if (cached) {
+        try {
+          setCoupons(JSON.parse(cached))
+        } catch (_) {}
+      }
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    loadCoupons()
+  }, [])
+
   // Gerador de código aleatório
   const handleGenerateCode = () => {
     const prefixes = ['LEVER', 'PROMO', 'OFF', 'VIP', 'FLASH']
@@ -72,25 +133,117 @@ export function CriarCupomPage({ onBack }: CriarCupomPageProps) {
     })
   }
 
-  // Ações da lista
-  const handleDeleteCoupon = (id: string) => {
-    const coupon = coupons.find((c) => c.id === id)
-    setCoupons((prev) => prev.filter((c) => c.id !== id))
-    showToast(`Cupom "${coupon?.code || ''}" excluído com sucesso.`)
+  const parseToNumber = (val: string): number => {
+    if (!val) return 0
+    const clean = val.replace(/[^\d,]/g, '').replace(',', '.')
+    return parseFloat(clean) || 0
   }
 
-  const handleToggleStatus = (id: string) => {
-    let nowActive = false
+  // Iniciar e cancelar edição
+  const handleEditCoupon = (c: CouponItem) => {
+    setEditingCouponId(c.id)
+    setCode(c.code)
+    setDescription(c.description || '')
+    setDiscountType(c.discountType)
+    setDiscountValue(String(c.discountValue))
+    setMinOrderValue(c.minOrderValue || '')
+    setHasUsageLimit(Boolean(c.usageLimit))
+    setUsageLimit(c.usageLimit ? String(c.usageLimit) : '100')
+    setOncePerCustomer(c.oncePerCustomer)
+    setHasExpiration(c.hasExpiration)
+    setStartDate(c.startDate || new Date().toISOString().slice(0, 10))
+    setEndDate(c.endDate || '')
+    setStatus(c.status)
+    setErrors({})
+    window.scrollTo({ top: 120, behavior: 'smooth' })
+  }
+
+  const handleCancelEdit = () => {
+    setEditingCouponId(null)
+    setCode('')
+    setDescription('')
+    setDiscountType('percentage')
+    setDiscountValue('10')
+    setMinOrderValue('')
+    setHasUsageLimit(false)
+    setUsageLimit('100')
+    setOncePerCustomer(true)
+    setHasExpiration(false)
+    setStartDate(new Date().toISOString().slice(0, 10))
+    setEndDate('')
+    setStatus('ativo')
+    setErrors({})
+  }
+
+  // Ações da lista: Excluir cupom
+  const handleDeleteCoupon = async (id: string) => {
+    const coupon = coupons.find((c) => c.id === id)
+    if (!coupon) return
+
+    if (!window.confirm(`Tem certeza que deseja excluir o cupom "${coupon.code}"?`)) {
+      return
+    }
+
+    try {
+      const { error } = await supabase.from('coupons').delete().eq('id', id)
+      if (error) {
+        showToast(`Erro ao excluir cupom: ${error.message}`)
+        return
+      }
+
+      const updated = coupons.filter((c) => c.id !== id)
+      setCoupons(updated)
+      try {
+        localStorage.setItem('lever_custom_coupons', JSON.stringify(updated))
+      } catch (_) {}
+
+      showToast(`Cupom "${coupon.code}" excluído com sucesso.`)
+      if (editingCouponId === id) {
+        handleCancelEdit()
+      }
+    } catch (err: any) {
+      showToast(`Erro ao excluir: ${err.message || 'Falha na conexão'}`)
+    }
+  }
+
+  // Ações da lista: Ativar / Pausar
+  const handleToggleStatus = async (id: string) => {
+    const coupon = coupons.find((c) => c.id === id)
+    if (!coupon) return
+    const nextStatus = coupon.status === 'ativo' ? 'inativo' : 'ativo'
+
+    // Otimista
     setCoupons((prev) =>
-      prev.map((c) => {
-        if (c.id === id) {
-          nowActive = c.status !== 'ativo'
-          return { ...c, status: nowActive ? 'ativo' : 'inativo' }
-        }
-        return c
-      })
+      prev.map((c) => (c.id === id ? { ...c, status: nextStatus } : c))
     )
-    showToast(`Cupom ${nowActive ? 'ativado' : 'pausado'} com sucesso.`)
+
+    try {
+      const { error } = await supabase
+        .from('coupons')
+        .update({ status: nextStatus, updated_at: new Date().toISOString() })
+        .eq('id', id)
+
+      if (error) {
+        // Reverter
+        setCoupons((prev) =>
+          prev.map((c) => (c.id === id ? { ...c, status: coupon.status } : c))
+        )
+        showToast(`Erro ao alterar status: ${error.message}`)
+      } else {
+        const updated = coupons.map((c) =>
+          c.id === id ? { ...c, status: nextStatus } : c
+        )
+        try {
+          localStorage.setItem('lever_custom_coupons', JSON.stringify(updated))
+        } catch (_) {}
+        showToast(`Cupom "${coupon.code}" ${nextStatus === 'ativo' ? 'ativado' : 'pausado'} com sucesso.`)
+      }
+    } catch (err: any) {
+      setCoupons((prev) =>
+        prev.map((c) => (c.id === id ? { ...c, status: coupon.status } : c))
+      )
+      showToast(`Erro: ${err.message || 'Falha de conexão'}`)
+    }
   }
 
   const handleCopyCode = (couponCode: string) => {
@@ -98,14 +251,16 @@ export function CriarCupomPage({ onBack }: CriarCupomPageProps) {
     showToast(`Código "${couponCode}" copiado para a área de transferência!`)
   }
 
-  // Salvar novo cupom
-  const handleSaveCoupon = () => {
+  // Salvar novo cupom ou atualizar existente
+  const handleSaveCoupon = async () => {
     const validationErrors: { code?: string; value?: string } = {}
     const cleanCode = code.trim().toUpperCase()
 
     if (!cleanCode) {
       validationErrors.code = 'Informe o código do cupom'
-    } else if (coupons.some((c) => c.code.toUpperCase() === cleanCode)) {
+    } else if (
+      coupons.some((c) => c.code.toUpperCase() === cleanCode && c.id !== editingCouponId)
+    ) {
       validationErrors.code = 'Este código de cupom já existe'
     }
 
@@ -121,28 +276,61 @@ export function CriarCupomPage({ onBack }: CriarCupomPageProps) {
     }
 
     setIsSaving(true)
+    const parsedMinOrder = minOrderValue.trim() ? parseToNumber(minOrderValue) : null
+    const parsedUsageLimit = hasUsageLimit ? parseInt(usageLimit, 10) || null : null
 
-    const newCoupon: CouponItem = {
-      id: String(Date.now()),
-      code: cleanCode,
-      description: description.trim() || undefined,
-      discountType,
-      discountValue: discountType === 'free_shipping' ? 0 : numValue,
-      minOrderValue: minOrderValue.trim() || undefined,
-      usageLimit: hasUsageLimit ? parseInt(usageLimit, 10) || undefined : undefined,
-      usedCount: 0,
-      oncePerCustomer,
-      hasExpiration,
-      startDate: hasExpiration ? startDate : undefined,
-      endDate: hasExpiration && endDate ? endDate : undefined,
-      status,
-      createdAt: Date.now(),
-    }
+    try {
+      if (editingCouponId) {
+        // Atualizar cupom existente no Supabase
+        const { error: updateErr } = await supabase
+          .from('coupons')
+          .update({
+            code: cleanCode,
+            description: description.trim() || null,
+            discount_type: discountType,
+            discount_value: discountType === 'free_shipping' ? 0 : numValue,
+            min_order_value: parsedMinOrder,
+            usage_limit: parsedUsageLimit,
+            once_per_customer: oncePerCustomer,
+            has_expiration: hasExpiration,
+            start_date: hasExpiration && startDate ? new Date(startDate).toISOString() : null,
+            end_date: hasExpiration && endDate ? new Date(endDate + 'T23:59:59').toISOString() : null,
+            status,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', editingCouponId)
 
-    setTimeout(() => {
-      setCoupons((prev) => [newCoupon, ...prev])
-      showToast(`Cupom "${newCoupon.code}" criado com sucesso!`)
-      setIsSaving(false)
+        if (updateErr) throw updateErr
+
+        showToast(`Cupom "${cleanCode}" atualizado com sucesso!`)
+        setEditingCouponId(null)
+      } else {
+        // Inserir novo cupom no Supabase
+        const { error: insertErr } = await supabase
+          .from('coupons')
+          .insert({
+            code: cleanCode,
+            description: description.trim() || null,
+            discount_type: discountType,
+            discount_value: discountType === 'free_shipping' ? 0 : numValue,
+            min_order_value: parsedMinOrder,
+            usage_limit: parsedUsageLimit,
+            used_count: 0,
+            once_per_customer: oncePerCustomer,
+            has_expiration: hasExpiration,
+            start_date: hasExpiration && startDate ? new Date(startDate).toISOString() : null,
+            end_date: hasExpiration && endDate ? new Date(endDate + 'T23:59:59').toISOString() : null,
+            status,
+          })
+
+        if (insertErr) throw insertErr
+
+        showToast(`Cupom "${cleanCode}" criado com sucesso!`)
+      }
+
+      // Recarregar dados atualizados do banco
+      await loadCoupons()
+
       // Resetar form
       setCode('')
       setDescription('')
@@ -151,8 +339,14 @@ export function CriarCupomPage({ onBack }: CriarCupomPageProps) {
       setMinOrderValue('')
       setHasUsageLimit(false)
       setHasExpiration(false)
+      setStatus('ativo')
       setErrors({})
-    }, 300)
+    } catch (err: any) {
+      console.error('Erro ao salvar cupom no Supabase:', err)
+      showToast(`Erro ao salvar cupom: ${err.message || 'Verifique a conexão.'}`)
+    } finally {
+      setIsSaving(false)
+    }
   }
 
   // Simulação de Desconto no Checkout Preview
@@ -202,6 +396,28 @@ export function CriarCupomPage({ onBack }: CriarCupomPageProps) {
         </div>
 
         <div className="product-create-topbar-right">
+          {editingCouponId && (
+            <button
+              type="button"
+              onClick={handleCancelEdit}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.4rem',
+                fontSize: '0.82rem',
+                color: '#4b5563',
+                backgroundColor: '#ffffff',
+                border: '1px solid #d1d5db',
+                padding: '0.5rem 0.85rem',
+                borderRadius: '6px',
+                cursor: 'pointer',
+                fontWeight: 500,
+              }}
+            >
+              Cancelar edição
+            </button>
+          )}
+
           <button
             type="button"
             className="product-create-save-btn"
@@ -230,7 +446,7 @@ export function CriarCupomPage({ onBack }: CriarCupomPageProps) {
                   <line x1="4.93" y1="19.07" x2="7.76" y2="16.24" />
                   <line x1="16.24" y1="7.76" x2="19.07" y2="4.93" />
                 </svg>
-                Salvando cupom...
+                {editingCouponId ? 'Salvando alterações...' : 'Salvando cupom...'}
               </>
             ) : (
               <>
@@ -246,7 +462,7 @@ export function CriarCupomPage({ onBack }: CriarCupomPageProps) {
                 >
                   <polyline points="20 6 9 17 4 12" />
                 </svg>
-                Salvar cupom
+                {editingCouponId ? 'Salvar alterações' : 'Salvar cupom'}
               </>
             )}
           </button>
@@ -263,14 +479,16 @@ export function CriarCupomPage({ onBack }: CriarCupomPageProps) {
               <div className="product-card-header">
                 <div className="header-title-row">
                   <div>
-                    <h2 className="product-card-title">Criar cupom</h2>
+                    <h2 className="product-card-title">{editingCouponId ? 'Editar cupom' : 'Criar cupom'}</h2>
                     <span className="product-card-desc">
-                      Defina o código de desconto que o cliente digitará no checkout
+                      {editingCouponId
+                        ? 'Atualize os dados e regras deste cupom'
+                        : 'Defina o código de desconto que o cliente digitará no checkout'}
                     </span>
                   </div>
                   <span className="product-create-status-badge">
                     <span className="status-dot status-online" />
-                    Novo cupom
+                    {editingCouponId ? 'Editando' : 'Novo cupom'}
                   </span>
                 </div>
               </div>
@@ -594,7 +812,49 @@ export function CriarCupomPage({ onBack }: CriarCupomPageProps) {
                     </tr>
                   </thead>
                   <tbody>
-                    {coupons.length === 0 ? (
+                    {isLoading ? (
+                      <tr>
+                        <td
+                          colSpan={6}
+                          style={{
+                            textAlign: 'center',
+                            padding: '3rem 1rem',
+                            color: '#6b7280',
+                          }}
+                        >
+                          <div
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '0.6rem',
+                              fontSize: '0.85rem',
+                            }}
+                          >
+                            <svg
+                              className="spin-icon"
+                              width="16"
+                              height="16"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="2"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                            >
+                              <line x1="12" y1="2" x2="12" y2="6" />
+                              <line x1="12" y1="18" x2="12" y2="22" />
+                              <line x1="4.93" y1="4.93" x2="7.76" y2="7.76" />
+                              <line x1="16.24" y1="16.24" x2="19.07" y2="19.07" />
+                              <line x1="2" y1="12" x2="6" y2="12" />
+                              <line x1="18" y1="12" x2="22" y2="12" />
+                              <line x1="4.93" y1="19.07" x2="7.76" y2="16.24" />
+                              <line x1="16.24" y1="7.76" x2="19.07" y2="4.93" />
+                            </svg>
+                            Carregando cupons...
+                          </div>
+                        </td>
+                      </tr>
+                    ) : coupons.length === 0 ? (
                       <tr>
                         <td
                           colSpan={6}
@@ -703,6 +963,14 @@ export function CriarCupomPage({ onBack }: CriarCupomPageProps) {
                                 gap: '0.5rem',
                               }}
                             >
+                              <button
+                                type="button"
+                                className="order-action-btn"
+                                style={{ padding: '0.3rem 0.6rem', fontSize: '0.74rem' }}
+                                onClick={() => handleEditCoupon(c)}
+                              >
+                                Editar
+                              </button>
                               <button
                                 type="button"
                                 className="order-action-btn"

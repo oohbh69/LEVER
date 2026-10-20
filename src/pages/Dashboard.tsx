@@ -1,10 +1,16 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { supabase } from '../lib/supabase'
 import { CriarProdutoPage, type NewProductData } from './CriarProduto'
 import { CriarFretePage } from './CriarFrete'
 import { CriarCupomPage } from './CriarCupom'
 import { CarrosselVitrinePage } from './CarrosselVitrine'
 import { DetalhesPedidoPage } from './DetalhesPedido'
+import {
+  fetchStoreVisitsFromSupabase,
+  fetchCartEventsFromSupabase,
+  type VisitEvent,
+  type CartEvent,
+} from '../utils/visitsTracker'
 
 type TabType =
   | 'dashboard'
@@ -15,6 +21,8 @@ type TabType =
   | 'frete'
   | 'cupom'
   | 'carrossel-vitrine'
+
+export type DatePreset = 'todos' | 'hoje' | '7dias' | '30dias' | 'este-mes' | 'custom'
 
 interface OrderItem {
   id: string
@@ -95,13 +103,238 @@ export function DashboardPage({
   const [isSavingTracking, setIsSavingTracking] = useState(false)
   const [isLoadingOrders, setIsLoadingOrders] = useState(false)
 
-  // Métricas dinâmicas calculadas a partir dos pedidos e produtos
-  const pendingOrdersCount = orders.filter((o) => o.paymentStatus === 'aguardando').length
-  const paidOrders = orders.filter((o) => o.paymentStatus === 'pago')
+  // Visitas e Carrinhos persistidos no banco de dados (Supabase public.site_visits & public.cart_events)
+  const [visits, setVisits] = useState<VisitEvent[]>([])
+  const [isLoadingVisits, setIsLoadingVisits] = useState(false)
+  const [cartEvents, setCartEvents] = useState<CartEvent[]>([])
+  const [isLoadingCarts, setIsLoadingCarts] = useState(false)
+
+  const loadVisitsAndCarts = async () => {
+    setIsLoadingVisits(true)
+    setIsLoadingCarts(true)
+    try {
+      const [visitsData, cartsData] = await Promise.all([
+        fetchStoreVisitsFromSupabase(),
+        fetchCartEventsFromSupabase(),
+      ])
+      setVisits(visitsData)
+      setCartEvents(cartsData)
+    } catch (err) {
+      console.error('Erro ao buscar métricas de visitas e carrinhos:', err)
+    } finally {
+      setIsLoadingVisits(false)
+      setIsLoadingCarts(false)
+    }
+  }
+
+  useEffect(() => {
+    loadVisitsAndCarts()
+  }, [activeTab])
+
+  // Inscrição em tempo real para visitas e carrinhos no banco de dados
+  useEffect(() => {
+    const channel = supabase
+      .channel('analytics_realtime')
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'site_visits' },
+        (payload) => {
+          if (payload.new) {
+            setVisits((prev) => [payload.new as VisitEvent, ...prev])
+          }
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'cart_events' },
+        (payload) => {
+          if (payload.new) {
+            setCartEvents((prev) => [payload.new as CartEvent, ...prev])
+          }
+        }
+      )
+      .subscribe()
+
+    return () => {
+      supabase.removeChannel(channel)
+    }
+  }, [])
+
+  // Filtros de data para Dashboard e Pedidos
+  const [datePreset, setDatePreset] = useState<DatePreset>('todos')
+  const [customStartDate, setCustomStartDate] = useState<string>('')
+  const [customEndDate, setCustomEndDate] = useState<string>('')
+
+  // Filtragem de pedidos por período de data
+  const filteredOrders = useMemo(() => {
+    if (datePreset === 'todos') {
+      return orders
+    }
+
+    const now = new Date()
+    let startMs: number | null = null
+    let endMs: number | null = null
+
+    if (datePreset === 'hoje') {
+      const start = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0)
+      const end = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999)
+      startMs = start.getTime()
+      endMs = end.getTime()
+    } else if (datePreset === '7dias') {
+      const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 6, 0, 0, 0, 0)
+      const end = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999)
+      startMs = start.getTime()
+      endMs = end.getTime()
+    } else if (datePreset === '30dias') {
+      const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 29, 0, 0, 0, 0)
+      const end = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999)
+      startMs = start.getTime()
+      endMs = end.getTime()
+    } else if (datePreset === 'este-mes') {
+      const start = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0)
+      const end = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999)
+      startMs = start.getTime()
+      endMs = end.getTime()
+    } else if (datePreset === 'custom') {
+      if (customStartDate) {
+        const [y, m, d] = customStartDate.split('-').map(Number)
+        startMs = new Date(y, m - 1, d, 0, 0, 0, 0).getTime()
+      }
+      if (customEndDate) {
+        const [y, m, d] = customEndDate.split('-').map(Number)
+        endMs = new Date(y, m - 1, d, 23, 59, 59, 999).getTime()
+      }
+    }
+
+    return orders.filter((order) => {
+      if (!order.rawCreatedAt) return true
+      const orderMs = new Date(order.rawCreatedAt).getTime()
+      if (isNaN(orderMs)) return true
+
+      if (startMs !== null && orderMs < startMs) return false
+      if (endMs !== null && orderMs > endMs) return false
+      return true
+    })
+  }, [orders, datePreset, customStartDate, customEndDate])
+
+  // Filtragem de visitas por período de data
+  const filteredVisits = useMemo(() => {
+    if (datePreset === 'todos') {
+      return visits
+    }
+
+    const now = new Date()
+    let startMs: number | null = null
+    let endMs: number | null = null
+
+    if (datePreset === 'hoje') {
+      const start = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0)
+      const end = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999)
+      startMs = start.getTime()
+      endMs = end.getTime()
+    } else if (datePreset === '7dias') {
+      const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 6, 0, 0, 0, 0)
+      const end = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999)
+      startMs = start.getTime()
+      endMs = end.getTime()
+    } else if (datePreset === '30dias') {
+      const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 29, 0, 0, 0, 0)
+      const end = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999)
+      startMs = start.getTime()
+      endMs = end.getTime()
+    } else if (datePreset === 'este-mes') {
+      const start = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0)
+      const end = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999)
+      startMs = start.getTime()
+      endMs = end.getTime()
+    } else if (datePreset === 'custom') {
+      if (customStartDate) {
+        const [y, m, d] = customStartDate.split('-').map(Number)
+        startMs = new Date(y, m - 1, d, 0, 0, 0, 0).getTime()
+      }
+      if (customEndDate) {
+        const [y, m, d] = customEndDate.split('-').map(Number)
+        endMs = new Date(y, m - 1, d, 23, 59, 59, 999).getTime()
+      }
+    }
+
+    return visits.filter((v) => {
+      if (!v.created_at) return true
+      const vMs = new Date(v.created_at).getTime()
+      if (isNaN(vMs)) return true
+
+      if (startMs !== null && vMs < startMs) return false
+      if (endMs !== null && vMs > endMs) return false
+      return true
+    })
+  }, [visits, datePreset, customStartDate, customEndDate])
+
+  const visitasCount = filteredVisits.length
+
+  // Filtragem de carrinhos por período de data
+  const filteredCartEvents = useMemo(() => {
+    if (datePreset === 'todos') {
+      return cartEvents
+    }
+
+    const now = new Date()
+    let startMs: number | null = null
+    let endMs: number | null = null
+
+    if (datePreset === 'hoje') {
+      const start = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0)
+      const end = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999)
+      startMs = start.getTime()
+      endMs = end.getTime()
+    } else if (datePreset === '7dias') {
+      const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 6, 0, 0, 0, 0)
+      const end = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999)
+      startMs = start.getTime()
+      endMs = end.getTime()
+    } else if (datePreset === '30dias') {
+      const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 29, 0, 0, 0, 0)
+      const end = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999)
+      startMs = start.getTime()
+      endMs = end.getTime()
+    } else if (datePreset === 'este-mes') {
+      const start = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0)
+      const end = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999)
+      startMs = start.getTime()
+      endMs = end.getTime()
+    } else if (datePreset === 'custom') {
+      if (customStartDate) {
+        const [y, m, d] = customStartDate.split('-').map(Number)
+        startMs = new Date(y, m - 1, d, 0, 0, 0, 0).getTime()
+      }
+      if (customEndDate) {
+        const [y, m, d] = customEndDate.split('-').map(Number)
+        endMs = new Date(y, m - 1, d, 23, 59, 59, 999).getTime()
+      }
+    }
+
+    return cartEvents.filter((c) => {
+      if (!c.created_at) return true
+      const cMs = new Date(c.created_at).getTime()
+      if (isNaN(cMs)) return true
+
+      if (startMs !== null && cMs < startMs) return false
+      if (endMs !== null && cMs > endMs) return false
+      return true
+    })
+  }, [cartEvents, datePreset, customStartDate, customEndDate])
+
+  // Contagem de carrinhos iniciados no período (sessões únicas com produtos adicionados)
+  const carrinhosCount = useMemo(() => {
+    const uniqueSessions = new Set(filteredCartEvents.map((e) => e.session_id || e.id))
+    return uniqueSessions.size
+  }, [filteredCartEvents])
+
+  // Métricas dinâmicas calculadas a partir dos pedidos filtrados
+  const pendingOrdersCount = filteredOrders.filter((o) => o.paymentStatus === 'aguardando').length
+  const paidOrders = filteredOrders.filter((o) => o.paymentStatus === 'pago')
   const paidOrdersCount = paidOrders.length
   const totalRevenue = paidOrders.reduce((acc, order) => {
-    const rawNum = parseFloat(order.total.replace(/[^\d,]/g, '').replace(',', '.')) || 0
-    return acc + rawNum
+    return acc + (order.totalNumeric || 0)
   }, 0)
   const formattedRevenue = `R$ ${totalRevenue.toLocaleString('pt-BR', {
     minimumFractionDigits: 2,
@@ -115,8 +348,8 @@ export function DashboardPage({
         })}`
       : 'R$ 0,00'
   const conversionRate =
-    orders.length > 0
-      ? `${((paidOrdersCount / orders.length) * 100).toFixed(1)}%`
+    visitasCount > 0
+      ? `${((paidOrdersCount / visitasCount) * 100).toFixed(1)}%`
       : '0.0%'
 
   useEffect(() => {
@@ -673,6 +906,136 @@ export function DashboardPage({
     }
   }
 
+  const getPresetLabel = (preset: DatePreset) => {
+    switch (preset) {
+      case 'hoje':
+        return 'Hoje'
+      case '7dias':
+        return 'Últimos 7 dias'
+      case '30dias':
+        return 'Últimos 30 dias'
+      case 'este-mes':
+        return 'Este mês'
+      case 'custom':
+        if (customStartDate && customEndDate) {
+          return `${customStartDate.split('-').reverse().join('/')} até ${customEndDate.split('-').reverse().join('/')}`
+        }
+        if (customStartDate) {
+          return `A partir de ${customStartDate.split('-').reverse().join('/')}`
+        }
+        if (customEndDate) {
+          return `Até ${customEndDate.split('-').reverse().join('/')}`
+        }
+        return 'Personalizado'
+      default:
+        return 'Todo o período'
+    }
+  }
+
+  const renderDateFilterBar = () => {
+    return (
+      <div className="dashboard-date-filter-bar">
+        <div className="date-filter-presets">
+          <button
+            type="button"
+            className={`date-preset-btn ${datePreset === 'todos' ? 'active' : ''}`}
+            onClick={() => {
+              setDatePreset('todos')
+              setCustomStartDate('')
+              setCustomEndDate('')
+            }}
+          >
+            Todos
+          </button>
+          <button
+            type="button"
+            className={`date-preset-btn ${datePreset === 'hoje' ? 'active' : ''}`}
+            onClick={() => setDatePreset('hoje')}
+          >
+            Hoje
+          </button>
+          <button
+            type="button"
+            className={`date-preset-btn ${datePreset === '7dias' ? 'active' : ''}`}
+            onClick={() => setDatePreset('7dias')}
+          >
+            7 dias
+          </button>
+          <button
+            type="button"
+            className={`date-preset-btn ${datePreset === '30dias' ? 'active' : ''}`}
+            onClick={() => setDatePreset('30dias')}
+          >
+            30 dias
+          </button>
+          <button
+            type="button"
+            className={`date-preset-btn ${datePreset === 'este-mes' ? 'active' : ''}`}
+            onClick={() => setDatePreset('este-mes')}
+          >
+            Este mês
+          </button>
+          <button
+            type="button"
+            className={`date-preset-btn ${datePreset === 'custom' ? 'active' : ''}`}
+            onClick={() => setDatePreset('custom')}
+          >
+            Personalizado
+          </button>
+        </div>
+
+        {datePreset === 'custom' && (
+          <div className="date-custom-inputs">
+            <label className="date-input-wrap">
+              <span>De:</span>
+              <input
+                type="date"
+                value={customStartDate}
+                onChange={(e) => setCustomStartDate(e.target.value)}
+              />
+            </label>
+            <label className="date-input-wrap">
+              <span>Até:</span>
+              <input
+                type="date"
+                value={customEndDate}
+                onChange={(e) => setCustomEndDate(e.target.value)}
+              />
+            </label>
+          </div>
+        )}
+
+        {datePreset !== 'todos' && (
+          <button
+            type="button"
+            className="date-clear-btn"
+            title="Remover filtro de data"
+            onClick={() => {
+              setDatePreset('todos')
+              setCustomStartDate('')
+              setCustomEndDate('')
+            }}
+          >
+            <svg
+              width="12"
+              height="12"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <line x1="18" y1="6" x2="6" y2="18" />
+              <line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+            Limpar
+          </button>
+        )}
+      </div>
+    )
+  }
+
   // Filtragem e Ordenação dos Produtos
   const filteredProducts = products
     .filter((product) => {
@@ -907,10 +1270,58 @@ export function DashboardPage({
         {activeTab === 'dashboard' && (
           <>
             <header className="dashboard-topbar">
-              <h1 className="dashboard-page-title">Dashboard</h1>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                <h1 className="dashboard-page-title">Dashboard</h1>
+                {datePreset !== 'todos' && (
+                  <span className="date-filter-indicator">
+                    {filteredOrders.length} {filteredOrders.length === 1 ? 'pedido' : 'pedidos'} no período
+                  </span>
+                )}
+              </div>
+              {renderDateFilterBar()}
             </header>
 
             <div className="dashboard-container">
+              {datePreset !== 'todos' && (
+                <div
+                  style={{
+                    marginBottom: '1.25rem',
+                    padding: '0.65rem 1rem',
+                    backgroundColor: '#f9fafb',
+                    border: '1px solid #e5e7eb',
+                    borderRadius: '6px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    fontSize: '0.82rem',
+                    color: '#4b5563',
+                  }}
+                >
+                  <span>
+                    Exibindo métricas do período: <strong>{getPresetLabel(datePreset)}</strong> ({filteredOrders.length} de {orders.length} pedidos)
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDatePreset('todos')
+                      setCustomStartDate('')
+                      setCustomEndDate('')
+                    }}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      color: '#000000',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      textDecoration: 'underline',
+                      padding: 0,
+                      fontSize: '0.8rem',
+                    }}
+                  >
+                    Ver período completo
+                  </button>
+                </div>
+              )}
               <div className="dashboard-cards-grid">
                 {/* 1. Pedidos aguardando pagamento */}
                 <div className="dashboard-card">
@@ -957,7 +1368,11 @@ export function DashboardPage({
                   <div className="dashboard-card-body">
                     <span className="dashboard-card-value">{paidOrdersCount}</span>
                     <span className="dashboard-card-footer positive">
-                      Aprovados hoje
+                      {datePreset === 'hoje'
+                        ? 'Aprovados hoje'
+                        : datePreset === 'todos'
+                        ? 'Total aprovados'
+                        : `Aprovados em ${getPresetLabel(datePreset).toLowerCase()}`}
                     </span>
                   </div>
                 </div>
@@ -982,7 +1397,11 @@ export function DashboardPage({
                   <div className="dashboard-card-body">
                     <span className="dashboard-card-value">{formattedRevenue}</span>
                     <span className="dashboard-card-footer positive">
-                      Total liquidado
+                      {datePreset === 'hoje'
+                        ? 'Faturamento de hoje'
+                        : datePreset === 'todos'
+                        ? 'Total liquidado acumulado'
+                        : `Liquidado em ${getPresetLabel(datePreset).toLowerCase()}`}
                     </span>
                   </div>
                 </div>
@@ -1013,7 +1432,38 @@ export function DashboardPage({
                   </div>
                 </div>
 
-                {/* 5. Carrinhos */}
+                {/* 5. Visitas */}
+                <div className="dashboard-card">
+                  <div className="dashboard-card-header">
+                    <span className="dashboard-card-label">Visitas</span>
+                    <svg
+                      className="dashboard-card-icon"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                      <circle cx="12" cy="12" r="3" />
+                    </svg>
+                  </div>
+                  <div className="dashboard-card-body">
+                    <span className="dashboard-card-value">
+                      {isLoadingVisits && visits.length === 0 ? '...' : visitasCount.toLocaleString('pt-BR')}
+                    </span>
+                    <span className="dashboard-card-footer positive">
+                      {datePreset === 'hoje'
+                        ? 'Acessos hoje na loja'
+                        : datePreset === 'todos'
+                        ? 'Total acumulado no banco'
+                        : `Sessões em ${getPresetLabel(datePreset).toLowerCase()}`}
+                    </span>
+                  </div>
+                </div>
+
+                {/* 6. Carrinhos */}
                 <div className="dashboard-card">
                   <div className="dashboard-card-header">
                     <span className="dashboard-card-label">Carrinhos</span>
@@ -1032,14 +1482,20 @@ export function DashboardPage({
                     </svg>
                   </div>
                   <div className="dashboard-card-body">
-                    <span className="dashboard-card-value">0</span>
+                    <span className="dashboard-card-value">
+                      {isLoadingCarts && cartEvents.length === 0 ? '...' : carrinhosCount.toLocaleString('pt-BR')}
+                    </span>
                     <span className="dashboard-card-footer">
-                      Iniciados nas últimas 24h
+                      {datePreset === 'hoje'
+                        ? 'Iniciados hoje'
+                        : datePreset === 'todos'
+                        ? 'Total de carrinhos iniciados'
+                        : `Iniciados em ${getPresetLabel(datePreset).toLowerCase()}`}
                     </span>
                   </div>
                 </div>
 
-                {/* 6. Taxa de conversão */}
+                {/* 7. Taxa de conversão */}
                 <div className="dashboard-card">
                   <div className="dashboard-card-header">
                     <span className="dashboard-card-label">Taxa de conversão</span>
@@ -1060,7 +1516,9 @@ export function DashboardPage({
                   <div className="dashboard-card-body">
                     <span className="dashboard-card-value">{conversionRate}</span>
                     <span className="dashboard-card-footer positive">
-                      Visitas para checkout concluído
+                      {visitasCount > 0
+                        ? `${paidOrdersCount} de ${visitasCount} visitantes converteram`
+                        : 'Visitas para checkout concluído'}
                     </span>
                   </div>
                 </div>
@@ -1073,7 +1531,14 @@ export function DashboardPage({
         {activeTab === 'pedidos' && (
           <>
             <header className="dashboard-topbar">
-              <h1 className="dashboard-page-title">Pedidos</h1>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                <h1 className="dashboard-page-title">Pedidos</h1>
+                <span className="date-filter-indicator">
+                  {filteredOrders.length} {filteredOrders.length === 1 ? 'pedido' : 'pedidos'}
+                  {datePreset !== 'todos' ? ` (de ${orders.length})` : ''}
+                </span>
+              </div>
+              {renderDateFilterBar()}
             </header>
 
             <div className="dashboard-container">
@@ -1120,10 +1585,37 @@ export function DashboardPage({
                           Nenhum pedido registrado no momento.
                         </td>
                       </tr>
+                    ) : filteredOrders.length === 0 ? (
+                      <tr>
+                        <td
+                          colSpan={8}
+                          style={{
+                            textAlign: 'center',
+                            padding: '3.5rem 1rem',
+                            color: '#6b7280',
+                            fontWeight: 400,
+                          }}
+                        >
+                          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.75rem' }}>
+                            <span>Nenhum pedido encontrado no período selecionado.</span>
+                            <button
+                              type="button"
+                              className="date-clear-btn"
+                              onClick={() => {
+                                setDatePreset('todos')
+                                setCustomStartDate('')
+                                setCustomEndDate('')
+                              }}
+                            >
+                              Limpar filtro e ver todos ({orders.length})
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
                     ) : (
-                      orders.map((order, index) => {
+                      filteredOrders.map((order, index) => {
                       const isMenuOpen = openMenuOrderId === order.id
-                      const isNearBottom = orders.length > 3 && index >= orders.length - 2
+                      const isNearBottom = filteredOrders.length > 3 && index >= filteredOrders.length - 2
 
                       return (
                         <tr key={order.id} style={{ position: 'relative', zIndex: isMenuOpen ? 50 : 1 }}>

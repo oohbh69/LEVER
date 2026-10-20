@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { supabase } from '../lib/supabase'
 import { useCart, formatBRL } from '../context/CartContext'
 
@@ -23,7 +23,17 @@ interface EnderecoData {
   bairro: string
   cidade: string
   uf: string
-  freteTipo: 'standard' | 'express'
+  freteTipo: string
+}
+
+interface CustomShippingOption {
+  id: string
+  name: string
+  price: number
+  deliveryTime: string
+  isFree: boolean
+  minOrderValue?: number
+  states: string[]
 }
 
 interface PagamentoData {
@@ -36,7 +46,16 @@ interface PagamentoData {
 }
 
 export function CheckoutPage({ onBackToStore }: CheckoutPageProps) {
-  const { items, subtotal, discountAmount, hasFreeShipping, clearCart } = useCart()
+  const {
+    items,
+    subtotal,
+    discountAmount,
+    hasFreeShipping,
+    clearCart,
+    appliedCoupon,
+    applyCoupon,
+    removeCoupon,
+  } = useCart()
 
   // Etapa atual (Pílulas: identificacao -> endereco -> pagamento)
   const [currentStep, setCurrentStep] = useState<CheckoutStep>('identificacao')
@@ -58,7 +77,7 @@ export function CheckoutPage({ onBackToStore }: CheckoutPageProps) {
     bairro: '',
     cidade: '',
     uf: '',
-    freteTipo: 'standard',
+    freteTipo: '',
   })
 
   // Formulário: 3. Pagamento
@@ -80,6 +99,72 @@ export function CheckoutPage({ onBackToStore }: CheckoutPageProps) {
   const [generatedOrderNumber, setGeneratedOrderNumber] = useState('')
   const [generatedPixCode, setGeneratedPixCode] = useState('')
   const [copiedPix, setCopiedPix] = useState(false)
+  const [dbShippingRates, setDbShippingRates] = useState<CustomShippingOption[]>([])
+
+  // Estado do Cupom de Desconto no Checkout
+  const [couponCodeInput, setCouponCodeInput] = useState('')
+  const [couponLoading, setCouponLoading] = useState(false)
+  const [couponFeedback, setCouponFeedback] = useState<{ message: string; isError: boolean } | null>(null)
+
+  const handleApplyCoupon = async () => {
+    if (!couponCodeInput.trim()) return
+    setCouponLoading(true)
+    setCouponFeedback(null)
+    try {
+      const res = await applyCoupon(couponCodeInput)
+      if (res.success) {
+        setCouponFeedback({ message: res.message, isError: false })
+        setCouponCodeInput('')
+      } else {
+        setCouponFeedback({ message: res.message, isError: true })
+      }
+    } catch {
+      setCouponFeedback({ message: 'Erro ao validar cupom.', isError: true })
+    } finally {
+      setCouponLoading(false)
+    }
+  }
+
+  // Carregar regras de frete ativas do Supabase
+  useEffect(() => {
+    async function fetchActiveRates() {
+      try {
+        const { data, error } = await supabase
+          .from('shipping_rates')
+          .select(`
+            id,
+            name,
+            price,
+            is_free,
+            delivery_time,
+            min_order_value,
+            shipping_rate_states (
+              state_uf
+            )
+          `)
+          .eq('status', 'ativo')
+
+        if (data && !error) {
+          const mapped: CustomShippingOption[] = data.map((r: any) => ({
+            id: r.id,
+            name: r.name,
+            price: Number(r.price) || 0,
+            deliveryTime: r.delivery_time || '2 a 5 dias úteis',
+            isFree: Boolean(r.is_free),
+            minOrderValue:
+              r.min_order_value !== null && r.min_order_value !== undefined
+                ? Number(r.min_order_value)
+                : undefined,
+            states: (r.shipping_rate_states || []).map((s: any) => s.state_uf),
+          }))
+          setDbShippingRates(mapped)
+        }
+      } catch (err) {
+        console.error('Erro ao buscar taxas de frete para checkout:', err)
+      }
+    }
+    fetchActiveRates()
+  }, [])
 
   // Rolagem suave para o topo ao trocar de etapa
   useEffect(() => {
@@ -160,13 +245,53 @@ export function CheckoutPage({ onBackToStore }: CheckoutPageProps) {
     }
   }
 
-  // Cálculo de Frete e Total
-  const freteValor = hasFreeShipping
-    ? 0
-    : endereco.freteTipo === 'express'
-    ? 24.9
-    : 14.9
-  const totalComFrete = subtotal + freteValor
+  const cleanCep = endereco.cep.replace(/\D/g, '')
+  const isCepCompleted = cleanCep.length === 8 && endereco.uf.trim().length === 2
+
+  // Taxas customizadas cadastradas que atendem o UF atual (APENAS após preenchimento do CEP)
+  const matchingCustomRates = useMemo(() => {
+    if (!isCepCompleted) return []
+    const uf = endereco.uf.trim().toUpperCase()
+    return dbShippingRates.filter((r) => r.states.length === 0 || r.states.includes(uf))
+  }, [dbShippingRates, endereco.uf, isCepCompleted])
+
+  // Manter a seleção sincronizada com as opções cadastradas disponíveis
+  useEffect(() => {
+    if (matchingCustomRates.length > 0) {
+      const exists = matchingCustomRates.some((r) => r.id === endereco.freteTipo)
+      if (!exists) {
+        setEndereco((prev) => ({ ...prev, freteTipo: matchingCustomRates[0].id }))
+      }
+    } else {
+      if (endereco.freteTipo) {
+        setEndereco((prev) => ({ ...prev, freteTipo: '' }))
+      }
+    }
+  }, [matchingCustomRates, endereco.freteTipo])
+
+  // Modalidade selecionada
+  const selectedCustomRate = isCepCompleted
+    ? matchingCustomRates.find((r) => r.id === endereco.freteTipo) || matchingCustomRates[0]
+    : null
+
+  // Cálculo de Frete e Total - EXCLUSIVAMENTE das opções cadastradas após digitação do CEP
+  let freteValor = 0
+  let shippingName = selectedCustomRate ? selectedCustomRate.name : 'A calcular'
+  const isShippingCalculated = Boolean(isCepCompleted && selectedCustomRate)
+
+  if (selectedCustomRate) {
+    const isFreeByMin =
+      selectedCustomRate.minOrderValue !== undefined &&
+      subtotal >= selectedCustomRate.minOrderValue
+    if (hasFreeShipping || selectedCustomRate.isFree || isFreeByMin) {
+      freteValor = 0
+    } else {
+      freteValor = selectedCustomRate.price
+    }
+  }
+
+  const effectiveDiscount = discountAmount || 0
+  const totalComFrete = Math.max(0, subtotal + freteValor - effectiveDiscount)
 
   // Validação de Etapa 1: Identificação
   const handleAvancarParaEndereco = (e: React.FormEvent) => {
@@ -226,6 +351,15 @@ export function CheckoutPage({ onBackToStore }: CheckoutPageProps) {
       setValidationError('Informe a sigla do estado (UF) com 2 letras.')
       return
     }
+    if (matchingCustomRates.length === 0) {
+      setValidationError(
+        `Nenhuma modalidade de frete cadastrada para o estado de ${cleanUf.toUpperCase()}. Entre em contato com nosso atendimento.`
+      )
+      return
+    }
+    if (!endereco.freteTipo && selectedCustomRate) {
+      setEndereco((prev) => ({ ...prev, freteTipo: selectedCustomRate.id }))
+    }
     setValidationError(null)
     setCurrentStep('pagamento')
   }
@@ -264,10 +398,6 @@ export function CheckoutPage({ onBackToStore }: CheckoutPageProps) {
 
     const randomSuffix = Math.floor(1000 + Math.random() * 9000)
     const randomOrder = `#LVR-${new Date().getFullYear()}-${randomSuffix}`
-    const shippingName =
-      endereco.freteTipo === 'express'
-        ? 'LEVER Sedex Expresso Prioritário'
-        : 'LEVER Standard Econômico'
     
     const isPix = pagamento.metodo === 'pix'
     const pixCode = `00020126580014br.gov.bcb.pix0136leverglasses-checkout-demo-${randomSuffix}5204000053039865405802BR5913LEVER_GLASSES6009SAO_PAULO62070503***6304`
@@ -374,6 +504,20 @@ export function CheckoutPage({ onBackToStore }: CheckoutPageProps) {
         console.warn('Erro ao registrar evento de rastreio:', trackErr)
       }
 
+      // 5. Registrar utilização do cupom se aplicável
+      if (appliedCoupon?.id) {
+        try {
+          await supabase.rpc('record_coupon_usage', {
+            p_coupon_id: appliedCoupon.id,
+            p_order_id: orderData.id,
+            p_customer_cpf: identificacao.cpf.trim(),
+            p_discount_amount: Number(effectiveDiscount.toFixed(2)),
+          })
+        } catch (couponRpcErr) {
+          console.warn('Erro ao registrar uso de cupom via RPC:', couponRpcErr)
+        }
+      }
+
       // Notificar a aplicação em tempo real
       window.dispatchEvent(
         new CustomEvent('orders-updated', {
@@ -435,7 +579,7 @@ export function CheckoutPage({ onBackToStore }: CheckoutPageProps) {
               {endereco.bairro} — {endereco.cidade}/{endereco.uf} • CEP: {endereco.cep}
             </p>
             <p className="summary-box-shipping">
-              Modalidade: <strong>{endereco.freteTipo === 'express' ? 'Sedex Expresso Prioritário' : 'Envio Standard Econômico'}</strong>
+              Modalidade: <strong>{shippingName}</strong>
             </p>
           </div>
 
@@ -861,47 +1005,64 @@ export function CheckoutPage({ onBackToStore }: CheckoutPageProps) {
                 <div className="checkout-shipping-options">
                   <span className="shipping-select-title">SELECIONE A MODALIDADE DE ENVIO:</span>
                   <div className="shipping-cards-stack">
-                    <label
-                      className={`shipping-method-card ${
-                        endereco.freteTipo === 'standard' ? 'selected' : ''
-                      }`}
-                    >
-                      <input
-                        type="radio"
-                        name="frete_opcao"
-                        checked={endereco.freteTipo === 'standard'}
-                        onChange={() =>
-                          setEndereco((prev) => ({ ...prev, freteTipo: 'standard' }))
-                        }
-                      />
-                      <div className="shipping-method-info">
-                        <strong>LEVER Standard Econômico</strong>
-                        <small>Entrega de 4 a 7 dias úteis com rastreio</small>
-                      </div>
-                      <span className="shipping-method-tag">
-                        {hasFreeShipping ? 'GRÁTIS' : 'R$ 14,90'}
-                      </span>
-                    </label>
+                    {matchingCustomRates.length > 0 ? (
+                      matchingCustomRates.map((rate) => {
+                        const isFreeByMin =
+                          rate.minOrderValue !== undefined && subtotal >= rate.minOrderValue
+                        const isFree = hasFreeShipping || rate.isFree || isFreeByMin
+                        const isSelected = endereco.freteTipo === rate.id
 
-                    <label
-                      className={`shipping-method-card ${
-                        endereco.freteTipo === 'express' ? 'selected' : ''
-                      }`}
-                    >
-                      <input
-                        type="radio"
-                        name="frete_opcao"
-                        checked={endereco.freteTipo === 'express'}
-                        onChange={() =>
-                          setEndereco((prev) => ({ ...prev, freteTipo: 'express' }))
-                        }
-                      />
-                      <div className="shipping-method-info">
-                        <strong>LEVER Sedex Expresso Prioritário</strong>
-                        <small>Entrega rápida de 1 a 3 dias úteis</small>
+                        return (
+                          <label
+                            key={rate.id}
+                            className={`shipping-method-card ${isSelected ? 'selected' : ''}`}
+                          >
+                            <input
+                              type="radio"
+                              name="frete_opcao"
+                              checked={isSelected}
+                              onChange={() =>
+                                setEndereco((prev) => ({ ...prev, freteTipo: rate.id }))
+                              }
+                            />
+                            <div className="shipping-method-info">
+                              <strong>{rate.name}</strong>
+                              <small>
+                                Previsão: {rate.deliveryTime}
+                                {rate.minOrderValue && !isFree && (
+                                  <span style={{ display: 'block', color: '#16a34a', marginTop: '2px' }}>
+                                    Grátis acima de R$ {rate.minOrderValue.toFixed(2).replace('.', ',')}
+                                  </span>
+                                )}
+                              </small>
+                            </div>
+                            <span className="shipping-method-tag">
+                              {isFree ? 'GRÁTIS' : `R$ ${rate.price.toFixed(2).replace('.', ',')}`}
+                            </span>
+                          </label>
+                        )
+                      })
+                    ) : (
+                      <div
+                        style={{
+                          padding: '1.25rem 1rem',
+                          textAlign: 'center',
+                          color: '#6b7280',
+                          fontSize: '0.85rem',
+                          backgroundColor: '#f9fafb',
+                          borderRadius: '8px',
+                          border: '1px dashed #d1d5db',
+                        }}
+                      >
+                        {!isCepCompleted ? (
+                          'Digite seu CEP acima para carregar as opções de frete.'
+                        ) : endereco.uf ? (
+                          `Nenhuma modalidade de frete cadastrada para o estado de ${endereco.uf}.`
+                        ) : (
+                          'Aguardando preenchimento do CEP para calcular o frete.'
+                        )}
                       </div>
-                      <span className="shipping-method-tag">R$ 24,90</span>
-                    </label>
+                    )}
                   </div>
                 </div>
 
@@ -1170,18 +1331,32 @@ export function CheckoutPage({ onBackToStore }: CheckoutPageProps) {
               {items.map((item) => (
                 <div key={item.id} className="summary-item-row">
                   <div className="summary-item-thumb">
-                    <svg
-                      width="22"
-                      height="22"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="1.5"
-                    >
-                      <circle cx="6.5" cy="14.5" r="3.5" />
-                      <circle cx="17.5" cy="14.5" r="3.5" />
-                      <path d="M3 11h3l2 4h8l2-4h3" />
-                    </svg>
+                    {item.image ? (
+                      <img
+                        src={item.image}
+                        alt={item.name}
+                        style={{
+                          width: '100%',
+                          height: '100%',
+                          objectFit: 'cover',
+                          borderRadius: '3px',
+                          display: 'block',
+                        }}
+                      />
+                    ) : (
+                      <svg
+                        width="22"
+                        height="22"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.5"
+                      >
+                        <circle cx="6.5" cy="14.5" r="3.5" />
+                        <circle cx="17.5" cy="14.5" r="3.5" />
+                        <path d="M3 11h3l2 4h8l2-4h3" />
+                      </svg>
+                    )}
                     <span className="summary-item-badge">{item.quantity}</span>
                   </div>
 
@@ -1197,16 +1372,148 @@ export function CheckoutPage({ onBackToStore }: CheckoutPageProps) {
               ))}
             </div>
 
+            {/* Cupom de Desconto */}
+            <div
+              style={{
+                padding: '0.85rem 1rem',
+                borderBottom: '1px solid #f3f4f6',
+                backgroundColor: '#fafafa',
+              }}
+            >
+              {appliedCoupon ? (
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    padding: '0.55rem 0.75rem',
+                    backgroundColor: '#f0fdf4',
+                    border: '1px dashed #86efac',
+                    borderRadius: '6px',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <svg
+                      width="14"
+                      height="14"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="#16a34a"
+                      strokeWidth="2"
+                    >
+                      <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" />
+                      <line x1="7" y1="7" x2="7.01" y2="7" />
+                    </svg>
+                    <div>
+                      <div style={{ fontSize: '0.8rem', fontWeight: 600, color: '#166534' }}>
+                        {appliedCoupon.code}
+                      </div>
+                      <div style={{ fontSize: '0.72rem', color: '#15803d' }}>
+                        {appliedCoupon.description}
+                      </div>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={removeCoupon}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      color: '#dc2626',
+                      fontSize: '0.72rem',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      padding: '0.2rem 0.4rem',
+                    }}
+                  >
+                    Remover
+                  </button>
+                </div>
+              ) : (
+                <div>
+                  <div style={{ display: 'flex', gap: '0.4rem' }}>
+                    <input
+                      type="text"
+                      placeholder="CUPOM DE DESCONTO"
+                      value={couponCodeInput}
+                      onChange={(e) => setCouponCodeInput(e.target.value.toUpperCase())}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault()
+                          handleApplyCoupon()
+                        }
+                      }}
+                      style={{
+                        flex: 1,
+                        padding: '0.5rem 0.65rem',
+                        fontSize: '0.8rem',
+                        border: '1px solid #d1d5db',
+                        borderRadius: '4px',
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.04em',
+                      }}
+                    />
+                    <button
+                      type="button"
+                      disabled={couponLoading || !couponCodeInput.trim()}
+                      onClick={handleApplyCoupon}
+                      style={{
+                        padding: '0.5rem 0.85rem',
+                        fontSize: '0.75rem',
+                        fontWeight: 600,
+                        backgroundColor: '#111111',
+                        color: '#ffffff',
+                        border: 'none',
+                        borderRadius: '4px',
+                        cursor: couponLoading || !couponCodeInput.trim() ? 'not-allowed' : 'pointer',
+                        opacity: couponLoading || !couponCodeInput.trim() ? 0.6 : 1,
+                      }}
+                    >
+                      {couponLoading ? '...' : 'APLICAR'}
+                    </button>
+                  </div>
+                  {couponFeedback && (
+                    <div
+                      style={{
+                        fontSize: '0.74rem',
+                        marginTop: '0.35rem',
+                        color: couponFeedback.isError ? '#dc2626' : '#16a34a',
+                      }}
+                    >
+                      {couponFeedback.message}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
             <div className="summary-math-breakdown">
               <div className="math-row">
                 <span>Subtotal</span>
                 <strong>{formatBRL(subtotal)}</strong>
               </div>
 
+              {effectiveDiscount > 0 && (
+                <div className="math-row" style={{ color: '#16a34a' }}>
+                  <span>Desconto ({appliedCoupon?.code})</span>
+                  <strong>- {formatBRL(effectiveDiscount)}</strong>
+                </div>
+              )}
+
               <div className="math-row">
-                <span>Frete ({endereco.freteTipo === 'express' ? 'Sedex' : 'Standard'})</span>
+                <span>Frete {isShippingCalculated ? `(${shippingName})` : ''}</span>
                 <span>
-                  {freteValor === 0 ? <strong className="green-text">GRÁTIS</strong> : formatBRL(freteValor)}
+                  {isShippingCalculated ? (
+                    freteValor === 0 ? (
+                      <strong className="green-text">GRÁTIS</strong>
+                    ) : (
+                      formatBRL(freteValor)
+                    )
+                  ) : (
+                    <span style={{ fontSize: '0.8rem', color: '#6b7280' }}>
+                      A calcular
+                    </span>
+                  )}
                 </span>
               </div>
 

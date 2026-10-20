@@ -1,7 +1,10 @@
 import { useState, type FormEvent } from 'react'
+import { supabase } from '../lib/supabase'
 
 export function ContatoPage() {
   const [submitted, setSubmitted] = useState(false)
+  const [isSending, setIsSending] = useState(false)
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [formData, setFormData] = useState({
     nome: '',
     email: '',
@@ -10,9 +13,34 @@ export function ContatoPage() {
     mensagem: '',
   })
 
-  const handleSubmit = (e: FormEvent) => {
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault()
-    setSubmitted(true)
+    setErrorMessage(null)
+    setIsSending(true)
+
+    try {
+      const { error } = await supabase.from('contact_messages').insert({
+        name: formData.nome.trim(),
+        email: formData.email.trim(),
+        phone: formData.telefone.trim() || null,
+        order_number: formData.pedido.trim() || null,
+        message: formData.mensagem.trim(),
+        status: 'novo',
+      })
+
+      if (error) {
+        throw error
+      }
+
+      setSubmitted(true)
+    } catch (err: any) {
+      console.error('Erro ao enviar mensagem de contato:', err)
+      setErrorMessage(
+        err.message || 'Não foi possível enviar sua mensagem no momento. Tente novamente ou use nossos canais diretos.'
+      )
+    } finally {
+      setIsSending(false)
+    }
   }
 
   return (
@@ -139,8 +167,24 @@ export function ContatoPage() {
                 />
               </div>
 
-              <button type="submit" className="submit-btn">
-                ENVIAR MENSAGEM
+              {errorMessage && (
+                <div
+                  style={{
+                    backgroundColor: '#fef2f2',
+                    border: '1px solid #fecaca',
+                    color: '#991b1b',
+                    padding: '0.75rem 1rem',
+                    borderRadius: '6px',
+                    fontSize: '0.85rem',
+                    marginBottom: '1rem',
+                  }}
+                >
+                  {errorMessage}
+                </div>
+              )}
+
+              <button type="submit" className="submit-btn" disabled={isSending}>
+                {isSending ? 'ENVIANDO...' : 'ENVIAR MENSAGEM'}
               </button>
             </form>
           )}

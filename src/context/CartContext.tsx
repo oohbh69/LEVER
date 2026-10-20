@@ -1,4 +1,6 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react'
+import { supabase } from '../lib/supabase'
+import { recordCartAddEvent } from '../utils/visitsTracker'
 
 export interface CartItem {
   id: number | string
@@ -13,10 +15,13 @@ export interface CartItem {
 }
 
 export interface AppliedCoupon {
+  id?: string
   code: string
+  discountType?: 'percentage' | 'fixed' | 'free_shipping'
   discountPercent?: number
   discountFixed?: number
   description: string
+  minOrderValue?: number | null
 }
 
 export interface ShippingOption {
@@ -43,7 +48,7 @@ interface CartContextType {
   freeShippingProgress: number
   hasFreeShipping: boolean
   appliedCoupon: AppliedCoupon | null
-  applyCoupon: (code: string) => { success: boolean; message: string }
+  applyCoupon: (code: string) => Promise<{ success: boolean; message: string }>
   removeCoupon: () => void
   shippingCep: string
   setShippingCep: (cep: string) => void
@@ -72,23 +77,15 @@ export function CartProvider({ children }: { children: ReactNode }) {
     try {
       const saved = localStorage.getItem(STORAGE_KEY)
       if (saved) {
-        return JSON.parse(saved)
+        const parsed = JSON.parse(saved)
+        if (Array.isArray(parsed)) {
+          return parsed.filter((it: any) => it.id !== 101)
+        }
       }
     } catch {
       // ignore
     }
-    return [
-      {
-        id: 101,
-        name: 'Óculos de Sol LEVER Blackout Acetato UV400',
-        price: 149.90,
-        priceFormatted: 'R$ 149,90',
-        installments: '6x de R$ 24,98 sem juros',
-        tag: 'Destaque',
-        variant: 'Acetato Preto Fosco • Lente UV400',
-        quantity: 1,
-      },
-    ]
+    return []
   })
 
   const [isOpen, setIsOpen] = useState(false)
@@ -134,6 +131,7 @@ export function CartProvider({ children }: { children: ReactNode }) {
       setJustAddedItemId(null)
     }, 1800)
 
+    recordCartAddEvent(newItem.id, newItem.name, newItem.price)
     setIsOpen(true)
   }
 
@@ -160,27 +158,96 @@ export function CartProvider({ children }: { children: ReactNode }) {
   const totalItems = items.reduce((acc, it) => acc + it.quantity, 0)
   const subtotal = items.reduce((acc, it) => acc + it.price * it.quantity, 0)
 
-  const hasFreeShipping = subtotal >= FREE_SHIPPING_THRESHOLD || appliedCoupon?.code === 'FRETEGRATIS'
+  const hasFreeShipping =
+    subtotal >= FREE_SHIPPING_THRESHOLD ||
+    appliedCoupon?.code === 'FRETEGRATIS' ||
+    appliedCoupon?.discountType === 'free_shipping'
+
   const freeShippingRemaining = Math.max(0, FREE_SHIPPING_THRESHOLD - subtotal)
   const freeShippingProgress = Math.min(100, (subtotal / FREE_SHIPPING_THRESHOLD) * 100)
 
-  const applyCoupon = (code: string) => {
+  const applyCoupon = async (code: string): Promise<{ success: boolean; message: string }> => {
     const normalized = code.trim().toUpperCase()
-    const found = AVAILABLE_COUPONS[normalized]
+    if (!normalized) {
+      return { success: false, message: 'Digite o código de um cupom.' }
+    }
 
+    try {
+      // 1. Validar no Supabase
+      const { data: dbCoupon, error } = await supabase
+        .from('coupons')
+        .select('*')
+        .ilike('code', normalized)
+        .maybeSingle()
+
+      if (!error && dbCoupon) {
+        if (dbCoupon.status !== 'ativo') {
+          return { success: false, message: `O cupom "${normalized}" está inativo.` }
+        }
+
+        const now = new Date()
+        if (dbCoupon.has_expiration) {
+          if (dbCoupon.start_date && now < new Date(dbCoupon.start_date)) {
+            return { success: false, message: `O cupom "${normalized}" ainda não começou a valer.` }
+          }
+          if (dbCoupon.end_date && now > new Date(dbCoupon.end_date)) {
+            return { success: false, message: `O cupom "${normalized}" expirou.` }
+          }
+        }
+
+        if (dbCoupon.usage_limit && (dbCoupon.used_count || 0) >= dbCoupon.usage_limit) {
+          return { success: false, message: `O cupom "${normalized}" atingiu o limite de usos.` }
+        }
+
+        if (dbCoupon.min_order_value && subtotal < Number(dbCoupon.min_order_value)) {
+          return {
+            success: false,
+            message: `Este cupom exige um pedido mínimo de ${formatBRL(Number(dbCoupon.min_order_value))}.`,
+          }
+        }
+
+        const dVal = Number(dbCoupon.discount_value) || 0
+        setAppliedCoupon({
+          id: dbCoupon.id,
+          code: dbCoupon.code,
+          discountType: dbCoupon.discount_type,
+          discountPercent: dbCoupon.discount_type === 'percentage' ? dVal : undefined,
+          discountFixed: dbCoupon.discount_type === 'fixed' ? dVal : undefined,
+          description:
+            dbCoupon.description ||
+            (dbCoupon.discount_type === 'free_shipping'
+              ? 'Frete Grátis'
+              : dbCoupon.discount_type === 'percentage'
+              ? `${dVal}% OFF`
+              : `R$ ${dVal.toFixed(2).replace('.', ',')} OFF`),
+          minOrderValue: dbCoupon.min_order_value ? Number(dbCoupon.min_order_value) : null,
+        })
+
+        return {
+          success: true,
+          message: `Cupom "${dbCoupon.code}" aplicado com sucesso!`,
+        }
+      }
+    } catch (err) {
+      console.warn('Erro ao consultar cupom no Supabase:', err)
+    }
+
+    // 2. Fallback local para cupons padrão
+    const found = AVAILABLE_COUPONS[normalized]
     if (found) {
       setAppliedCoupon({
         code: normalized,
+        discountType: found.fixed ? 'fixed' : (found.percent === 0 ? 'free_shipping' : 'percentage'),
         discountPercent: found.percent,
         discountFixed: found.fixed,
         description: found.desc,
       })
-      return { success: true, message: `Cupom ${normalized} aplicado!` }
+      return { success: true, message: `Cupom "${normalized}" aplicado!` }
     }
 
     return {
       success: false,
-      message: 'Cupom inválido. Tente LEVER10 ou PRIMEIRACOMPRA.',
+      message: 'Cupom inválido ou inexistente.',
     }
   }
 
@@ -190,7 +257,9 @@ export function CartProvider({ children }: { children: ReactNode }) {
 
   let discountAmount = 0
   if (appliedCoupon) {
-    if (appliedCoupon.discountPercent) {
+    if (appliedCoupon.minOrderValue && subtotal < appliedCoupon.minOrderValue) {
+      discountAmount = 0
+    } else if (appliedCoupon.discountPercent) {
       discountAmount = (subtotal * appliedCoupon.discountPercent) / 100
     } else if (appliedCoupon.discountFixed) {
       discountAmount = Math.min(subtotal, appliedCoupon.discountFixed)
