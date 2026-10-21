@@ -9,8 +9,10 @@ import { TrocasDevolucoesPage } from './pages/TrocasDevolucoes'
 import { CheckoutPage } from './pages/Checkout'
 import { PainelPage } from './pages/Painel'
 import { DashboardPage } from './pages/Dashboard'
+import { CategoriasPage } from './pages/Categorias'
 import { CartProvider, useCart } from './context/CartContext'
 import { CartDrawer } from './components/CartDrawer'
+import { MenuDrawer } from './components/MenuDrawer'
 import { supabase } from './lib/supabase'
 import type { Session } from '@supabase/supabase-js'
 import {
@@ -23,6 +25,8 @@ import { recordStoreVisit } from './utils/visitsTracker'
 type PageRoute =
   | 'home'
   | 'produto'
+  | 'categoria'
+  | 'categorias'
   | 'carrinho'
   | 'checkout'
   | 'contato'
@@ -109,6 +113,9 @@ function AppContent() {
         return 'checkout'
       case 'produto':
         return 'produto'
+      case 'categoria':
+      case 'categorias':
+        return 'categoria'
       case 'contato':
         return 'contato'
       case 'politica-de-frete':
@@ -137,9 +144,18 @@ function AppContent() {
     )
   }
 
+  const getInitialCategorySlug = (): string | null => {
+    if (typeof window === 'undefined') return null
+    const hashMatch = window.location.hash.match(/[#?&](?:slug|cat)=([a-zA-Z0-9_-]+)/i)
+    const searchMatch = window.location.search.match(/[?&](?:slug|cat)=([a-zA-Z0-9_-]+)/i)
+    return hashMatch?.[1] || searchMatch?.[1] || null
+  }
+
   const [currentPage, setCurrentPage] = useState<PageRoute>(getRouteFromUrl)
   const [selectedProductName, setSelectedProductName] = useState('')
   const [selectedProductId, setSelectedProductId] = useState<string | null>(getInitialProductId)
+  const [selectedCategorySlug, setSelectedCategorySlug] = useState<string | null>(getInitialCategorySlug)
+  const [isMenuOpen, setIsMenuOpen] = useState(false)
   const [addedCardId, setAddedCardId] = useState<string | number | null>(null)
   const [session, setSession] = useState<Session | null>(null)
   const [isAuthLoading, setIsAuthLoading] = useState(true)
@@ -313,6 +329,11 @@ function AppContent() {
         } catch (_) {}
       }
 
+      const catMatch =
+        window.location.hash.match(/[#?&](?:slug|cat)=([a-zA-Z0-9_-]+)/i) ||
+        window.location.search.match(/[?&](?:slug|cat)=([a-zA-Z0-9_-]+)/i)
+      setSelectedCategorySlug(catMatch?.[1] || null)
+
       window.scrollTo({ top: 0, behavior: 'smooth' })
     }
 
@@ -329,6 +350,12 @@ function AppContent() {
     const routeTitles: Record<PageRoute, string> = {
       home: 'LEVER',
       produto: selectedProductName ? `LEVER | ${selectedProductName}` : 'LEVER | Óculos de Sol',
+      categoria: selectedCategorySlug
+        ? `LEVER | ${selectedCategorySlug.toUpperCase().replace('-', ' ')}`
+        : 'LEVER | Categorias',
+      categorias: selectedCategorySlug
+        ? `LEVER | ${selectedCategorySlug.toUpperCase().replace('-', ' ')}`
+        : 'LEVER | Categorias',
       carrinho: 'LEVER | Carrinho',
       checkout: 'LEVER | Checkout Seguro',
       contato: 'LEVER | Contato',
@@ -345,7 +372,7 @@ function AppContent() {
       'carrossel-vitrine': 'LEVER | Carrossel Vitrine',
     }
     document.title = routeTitles[currentPage] || 'LEVER'
-  }, [currentPage, selectedProductName])
+  }, [currentPage, selectedProductName, selectedCategorySlug])
 
   // Registrar visita na loja para rotas públicas (desconsiderando painel/admin)
   useEffect(() => {
@@ -362,10 +389,14 @@ function AppContent() {
     }
   }, [currentPage])
 
-  const navigateTo = (page: PageRoute, prodId?: string) => {
+  const navigateTo = (page: PageRoute | string, prodId?: string, catSlug?: string) => {
     if (page === 'home') {
       window.history.pushState({}, '', '/')
       window.location.hash = ''
+    } else if (page === 'categoria' || page === 'categorias') {
+      const targetSlug = catSlug !== undefined ? catSlug : selectedCategorySlug
+      setSelectedCategorySlug(targetSlug || null)
+      window.location.hash = targetSlug ? `categoria?slug=${targetSlug}` : 'categoria'
     } else if (page === 'painel') {
       window.history.pushState({}, '', '/painel')
       window.location.hash = ''
@@ -395,7 +426,7 @@ function AppContent() {
     } else {
       window.location.hash = page
     }
-    setCurrentPage(page)
+    setCurrentPage(page as PageRoute)
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
@@ -511,6 +542,7 @@ function AppContent() {
             className="header-btn"
             aria-label="Menu"
             id="menu-toggle-btn"
+            onClick={() => setIsMenuOpen(true)}
           >
             <svg
               width="24"
@@ -619,8 +651,8 @@ function AppContent() {
         </div>
       </aside>
 
-      {/* Navegação de retorno quando fora da Home */}
-      {currentPage !== 'home' && (
+      {/* Navegação de retorno quando fora da Home e fora de páginas com navegação própria */}
+      {currentPage !== 'home' && currentPage !== 'categoria' && currentPage !== 'categorias' && (
         <div className="breadcrumb-bar">
           <button
             type="button"
@@ -1130,6 +1162,28 @@ function AppContent() {
         )}
 
         {/* Páginas do Rodapé e Produto */}
+        {(currentPage === 'categoria' || currentPage === 'categorias') && (
+          <CategoriasPage
+            categorySlug={selectedCategorySlug}
+            onNavigateToProduct={(id, name) => {
+              setSelectedProductName(name)
+              setSelectedProductId(String(id))
+              try {
+                sessionStorage.setItem('lever_selected_product_id', String(id))
+              } catch (_) {}
+              navigateTo('produto', String(id))
+            }}
+            onNavigateToHome={() => navigateTo('home')}
+            onSelectCategory={(slug) => {
+              setSelectedCategorySlug(slug)
+              if (slug) {
+                window.location.hash = `categoria?slug=${slug}`
+              } else {
+                window.location.hash = 'categoria'
+              }
+            }}
+          />
+        )}
         {currentPage === 'produto' && (
           <ProdutoPage
             productId={selectedProductId}
@@ -1267,6 +1321,17 @@ function AppContent() {
                 </li>
                 <li>
                   <a
+                    href="#categoria"
+                    onClick={(e) => {
+                      e.preventDefault()
+                      navigateTo('categoria')
+                    }}
+                  >
+                    Categorias
+                  </a>
+                </li>
+                <li>
+                  <a
                     href="#trocas-e-devolucoes"
                     onClick={(e) => {
                       e.preventDefault()
@@ -1310,6 +1375,17 @@ function AppContent() {
       <CartDrawer
         onNavigateToCatalog={() => navigateTo('home')}
         onNavigateToCheckout={() => navigateTo('checkout')}
+      />
+
+      {/* Menu Lateral Esquerdo (Categorias e Navegação) */}
+      <MenuDrawer
+        isOpen={isMenuOpen}
+        onClose={() => setIsMenuOpen(false)}
+        onNavigate={(page, catSlug) => {
+          setIsMenuOpen(false)
+          navigateTo(page as PageRoute, undefined, catSlug)
+        }}
+        activeCategorySlug={selectedCategorySlug}
       />
     </div>
   )
